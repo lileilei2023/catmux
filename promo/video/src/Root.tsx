@@ -11,13 +11,14 @@ import { Terminal } from './scenes/Terminal'
 import { Diff } from './scenes/Diff'
 import { PullRequest } from './scenes/PullRequest'
 import { Create } from './scenes/Create'
+import { Compare } from './scenes/Compare'
 import { Cta } from './scenes/Cta'
 
 const V = { width: 1080, height: 1920, fps: 30 }
 export const RemotionRoot: React.FC = () => (
   <>
     <Folder name="Douyin-Scenes">
-      <Composition id="Hook" component={Hook} {...V} durationInFrames={90} />
+      <Composition id="Hook" component={Hook} {...V} durationInFrames={135} />
       <Composition id="Pains" component={Pains} {...V} durationInFrames={150} />
       <Composition id="Reveal" component={Reveal} {...V} durationInFrames={90} />
       <Composition id="Overview" component={Overview} {...V} durationInFrames={120} />
@@ -26,6 +27,7 @@ export const RemotionRoot: React.FC = () => (
       <Composition id="Diff" component={Diff} {...V} durationInFrames={135} />
       <Composition id="PullRequest" component={PullRequest} {...V} durationInFrames={135} />
       <Composition id="Create" component={Create} {...V} durationInFrames={120} />
+      <Composition id="Compare" component={Compare} {...V} durationInFrames={120} />
       <Composition id="Cta" component={Cta} {...V} durationInFrames={150} />
     </Folder>
     <Composition id="Douyin" component={Douyin} {...V} durationInFrames={DOUYIN_FRAMES} />

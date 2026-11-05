@@ -38,7 +38,7 @@ export const Reveal: React.FC = () => {
           opacity: interpolate(frame, [24, 36], [0, 1], { ...clamp, easing: ease }),
         }}
       >
-        一个窗口，管住<span style={{ color: C.accent }}>所有机器</span>上的 AI 会话
+        远程的 Claude，<span style={{ color: C.accent }}>本地的体验</span>
       </Interactive.Div>
       </AbsoluteFill>
     </AbsoluteFill>

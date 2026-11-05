@@ -4,7 +4,7 @@ import { Backdrop, Caption, ShotCard, Hl, ease } from '../components'
 import { C, FONT } from '../theme'
 
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const
-const CHIPS = ['不闪屏', '⌥ 拖动即可复制', '粘贴截图自动传到远端']
+const CHIPS = ['合盖 / 换网 / 刷新都不丢', '回到原来那一行', 'tssh 跨网络漫游']
 
 export const Terminal: React.FC = () => {
   const frame = useCurrentFrame()
@@ -13,7 +13,7 @@ export const Terminal: React.FC = () => {
   return (
     <AbsoluteFill>
       <Backdrop glowY={55} />
-      <Caption title={<>真 <Hl>tmux</Hl> 终端</>} sub="断网、关窗口、刷新页面，会话都还在" />
+      <Caption title={<>断线？<Hl>接着跑</Hl></>} sub="Claude 一直在服务器的 tmux 里跑" />
       <ShotCard src={`shots/term-${step}.png`} from={{ x: 285, y: 110, w: 600, h: 421 }} to={{ x: 290, y: 130, w: 540, h: 379 }} t0={20} t1={150} y={660} width={960} enter={2} />
       <div style={{ position: 'absolute', left: 80, right: 80, top: 1410, display: 'flex', flexWrap: 'wrap', gap: 22, justifyContent: 'center', fontFamily: FONT }}>
         {CHIPS.map((t, i) => (

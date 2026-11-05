@@ -15,7 +15,7 @@ export const Overview: React.FC = () => {
   return (
     <AbsoluteFill>
       <Backdrop glowY={55} />
-      <Caption title={<>三栏，<Hl>一屏看全</Hl></>} sub="像 Codex 桌面版一样顺手，管的是所有机器" />
+      <Caption title={<>远程，却像<Hl>在本机</Hl></>} sub="截图传到服务器 · 复制直达 Mac · 不闪屏" />
       <ShotCard src="shots/hero.png" from={{ x: 0, y: 0, w: 1440, h: 900 }} y={700} width={960} enter={4}>
         {map => PANES.map((p, i) => (
           <div key={p.label} style={{ ...map({ x: p.x, y: 0, w: p.w, h: 900 }), borderRight: i < 2 ? `3px dashed ${C.accent}` : undefined, opacity: interpolate(frame, [24 + i * 8, 34 + i * 8], [0, 1], clamp) }} />

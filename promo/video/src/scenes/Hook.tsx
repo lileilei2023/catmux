@@ -3,66 +3,91 @@ import { AbsoluteFill, Easing, Interactive, interpolate, useCurrentFrame } from 
 import { Backdrop, ease } from '../components'
 import { C, FONT, MONO } from '../theme'
 
-// Scattered terminal windows (one per machine) drifting in — the "before".
-const WINDOWS = [
-  { host: 'mac-mini', line: 'codex › 改分页…', x: 70, y: 980, r: -6 },
-  { host: 'gpu-server', line: 'claude › epoch 14/40', x: 520, y: 1080, r: 5 },
-  { host: '本机', line: 'tmux a -t web', x: 120, y: 1330, r: 4 },
-  { host: 'cloud-dev', line: 'tail -f error.log', x: 560, y: 1420, r: -4 },
-  { host: 'mac-mini', line: 'claude › 登录页…', x: 300, y: 1590, r: -2 },
+// A Claude session on a server keeps running while the laptop is closed, then reattaches.
+const OUT = [
+  'claude › 重构支付模块',
+  '  ✓ 读取 12 个文件',
+  '  ✓ 修改 order/service.py',
+  '  ✓ 测试 120/120 通过',
+  '  ✓ 修改 api/refund.py',
+  '  ✓ 完成，等你 review',
 ]
+const CLOSE = 46
+const OPEN = 84
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const
 
 export const Hook: React.FC = () => {
   const frame = useCurrentFrame()
-  const lines = ['Mac mini 上跑 Codex', 'GPU 机上跑 Claude', '本机还有一堆 tmux']
+  const lines = [
+    { t: '合上笔记本', at: 0, color: C.fg },
+    { t: 'Claude 还在服务器上跑', at: CLOSE + 4, color: C.fg },
+    { t: '打开，回到刚才那一行', at: OPEN + 4, color: C.accent },
+  ]
+  const shown = frame < CLOSE ? 3 : frame < OPEN ? 3 : 6
+  const off = interpolate(frame, [CLOSE, CLOSE + 8, OPEN, OPEN + 8], [0, 1, 1, 0], clamp)
   return (
     <AbsoluteFill>
       <Backdrop glowY={20} />
-      <div style={{ position: 'absolute', left: 80, right: 80, top: 190, fontFamily: FONT, color: C.fg }}>
-        {lines.map((t, i) => (
+      <div style={{ position: 'absolute', left: 80, right: 80, top: 180, fontFamily: FONT }}>
+        {lines.map((l, i) => (
           <Interactive.Div
-            key={t}
+            key={l.t}
             name={`Line ${i + 1}`}
             style={{
-              fontSize: 64, fontWeight: 700, lineHeight: 1.5, color: C.muted,
-              opacity: interpolate(frame, [i * 9, i * 9 + 10], [0, 1], { ...clamp, easing: ease }),
-              translate: interpolate(frame, [i * 9, i * 9 + 14], ['-40px 0px', '0px 0px'], { ...clamp, easing: ease }),
+              fontSize: i === 2 ? 84 : 76, fontWeight: 900, lineHeight: 1.35, letterSpacing: -1, color: l.color,
+              opacity: interpolate(frame, [l.at, l.at + 10], [0, 1], { ...clamp, easing: ease }),
+              translate: interpolate(frame, [l.at, l.at + 14], ['-40px 0px', '0px 0px'], { ...clamp, easing: ease }),
             }}
           >
-            {t}
+            {l.t}
           </Interactive.Div>
         ))}
-        <Interactive.Div
-          name="Punchline"
-          style={{
-            marginTop: 30, fontSize: 112, fontWeight: 900, letterSpacing: -2, color: C.fg,
-            opacity: interpolate(frame, [34, 44], [0, 1], { ...clamp, easing: ease }),
-            scale: interpolate(frame, [34, 48], [1.25, 1], { ...clamp, easing: Easing.spring({ damping: 12 }), output: 'perceptual-scale' }),
-          }}
-        >
-          窗口切到<span style={{ color: C.accent }}>崩溃？</span>
-        </Interactive.Div>
       </div>
-      {WINDOWS.map((w, i) => (
+      <div
+        style={{
+          position: 'absolute', left: 80, right: 80, top: 860, padding: '34px 40px', borderRadius: 28,
+          background: C.panel, border: `2px solid ${C.line}`, boxShadow: '0 40px 120px rgba(0,0,0,.55)',
+          fontFamily: MONO, fontSize: 40, lineHeight: 1.7, color: C.fg,
+          opacity: interpolate(frame, [4, 14], [0, 1], clamp),
+          translate: interpolate(frame, [4, 22], ['0px 100px', '0px 0px'], { ...clamp, easing: ease }),
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, fontFamily: FONT, fontSize: 32 }}>
+          {['#f0544c', '#e5b449', '#3fb37f'].map(c => <span key={c} style={{ width: 18, height: 18, borderRadius: 9, background: c }} />)}
+          <span style={{ marginLeft: 12, color: C.dim }}>gpu-server · tmux</span>
+          <Badge frame={frame} />
+        </div>
+        <div style={{ filter: `grayscale(${off}) blur(${off * 3}px)`, opacity: 1 - off * 0.7 }}>
+          {OUT.slice(0, shown).map((t, i) => (
+            <div key={i} style={{ color: t.includes('✓') ? C.ok : t.startsWith('claude') ? C.fg : C.muted, opacity: i >= 3 ? interpolate(frame, [OPEN + 6 + (i - 3) * 6, OPEN + 12 + (i - 3) * 6], [0, 1], clamp) : 1 }}>{t}</div>
+          ))}
+          <span style={{ opacity: frame % 20 < 10 ? 1 : 0, color: C.accent }}>▌</span>
+        </div>
         <div
-          key={i}
           style={{
-            position: 'absolute', left: w.x, top: w.y, width: 450, padding: '22px 26px', borderRadius: 20,
-            background: C.panel, border: `2px solid ${C.line}`, boxShadow: '0 30px 80px rgba(0,0,0,.5)',
-            fontFamily: MONO, fontSize: 30, color: C.fg,
-            rotate: `${w.r + Math.sin((frame + i * 20) / 18) * 1.5}deg`,
-            opacity: interpolate(frame, [6 + i * 5, 16 + i * 5], [0, 1], clamp),
-            translate: interpolate(frame, [6 + i * 5, 26 + i * 5], ['0px 120px', '0px 0px'], { ...clamp, easing: ease }),
+            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: FONT, fontSize: 58, fontWeight: 800, color: C.fg, opacity: off,
           }}
         >
-          <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-            {['#f0544c', '#e5b449', '#3fb37f'].map(c => <span key={c} style={{ width: 16, height: 16, borderRadius: 8, background: c }} />)}
-            <span style={{ marginLeft: 12, fontSize: 24, color: C.dim }}>ssh {w.host}</span>
-          </div>
-          {w.line}<span style={{ opacity: frame % 20 < 10 ? 1 : 0, color: C.accent }}>▌</span>
+          连接已断开 · 笔记本合盖
         </div>
-      ))}
+      </div>
     </AbsoluteFill>
+  )
+}
+
+const Badge: React.FC<{ frame: number }> = ({ frame }) => {
+  const back = frame >= OPEN
+  return (
+    <span
+      style={{
+        marginLeft: 'auto', padding: '8px 22px', borderRadius: 999, fontWeight: 700,
+        color: back ? C.ok : C.fg, background: back ? 'rgba(63,179,127,.16)' : 'rgba(255,255,255,.06)',
+        border: `2px solid ${back ? 'rgba(63,179,127,.5)' : C.line}`,
+        scale: back ? interpolate(frame, [OPEN, OPEN + 12], [1.3, 1], { ...clamp, easing: Easing.spring({ damping: 12 }), output: 'perceptual-scale' }) : 1,
+      }}
+    >
+      {back ? '● 已重连 · 同一个会话' : frame >= CLOSE ? '○ 离线' : '● 运行中'}
+    </span>
   )
 }
