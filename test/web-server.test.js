@@ -214,3 +214,24 @@ test('vendored front-end assets are served without node_modules', async t => {
   const info = await (await f.api('info')).json()
   assert.equal(info.data.name, 'Catmux'); assert.match(info.data.version, /^\d+\.\d+\.\d+$/); assert.equal(info.data.initialHost, '')
 })
+
+test('first start migrates session records and settings from the old "AI Hub Web" data directory', async t => {
+  const realHome = process.env.HOME
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'catmux-migrate-')))
+  process.env.HOME = home
+  t.after(() => { process.env.HOME = realHome; fs.rmSync(home, { recursive: true, force: true }) })
+  const base = path.join(home, 'Library', 'Application Support'), legacy = path.join(base, 'AI Hub Web'), dir = path.join(base, 'Catmux')
+  fs.mkdirSync(legacy, { recursive: true, mode: 0o700 })
+  const record = { ...P.newSession({ host: 'macmini', project: '/p', tool: 'codex' }), status: 'detached' }
+  fs.writeFileSync(path.join(legacy, 'remote-sessions.json'), JSON.stringify([record]))
+  fs.writeFileSync(path.join(legacy, 'project-settings.json'), JSON.stringify({ 'macmini\n/p': { base: 'develop', prTarget: 'develop' } }))
+  // The new directory may already exist (e.g. only a lock from an earlier start).
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const context = await createWebServer({ port: 0 })
+  t.after(() => context.close())
+  assert.equal(context.store.list().length, 1, 'sessions migrated')
+  assert.equal(context.store.list()[0].id, record.id)
+  assert.equal(fs.statSync(path.join(dir, 'remote-sessions.json')).mode & 0o777, 0o600)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'project-settings.json'), 'utf8'))['macmini\n/p'], { base: 'develop', prTarget: 'develop' })
+  assert(fs.existsSync(path.join(legacy, 'remote-sessions.json')), 'old directory left untouched')
+})

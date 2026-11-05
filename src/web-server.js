@@ -33,12 +33,16 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 // (session records + settings; never the lock) into the new data directory.
 function defaultDataDir() {
   const base = path.join(os.homedir(), 'Library', 'Application Support')
-  const dir = path.join(base, 'Catmux'), legacy = path.join(base, 'Catmux')
-  if (!fs.existsSync(dir) && fs.existsSync(legacy) && fs.lstatSync(legacy).isDirectory()) {
+  // 'AI Hub Web' is this project's previous name: keep this literal as is.
+  const dir = path.join(base, 'Catmux'), legacy = path.join(base, 'AI Hub Web')
+  // Migrate when the new directory has no session records yet (it may already
+  // exist, e.g. holding only a lock); existing Catmux data is never overwritten.
+  const records = 'remote-sessions.json'
+  if (!fs.existsSync(path.join(dir, records)) && fs.existsSync(path.join(legacy, records)) && fs.lstatSync(legacy).isDirectory()) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-    for (const name of ['remote-sessions.json', 'launch-settings.json', 'project-settings.json']) {
-      const from = path.join(legacy, name)
-      if (fs.existsSync(from) && fs.lstatSync(from).isFile()) { fs.copyFileSync(from, path.join(dir, name)); fs.chmodSync(path.join(dir, name), 0o600) }
+    for (const name of [records, 'launch-settings.json', 'project-settings.json']) {
+      const from = path.join(legacy, name), to = path.join(dir, name)
+      if (fs.existsSync(from) && fs.lstatSync(from).isFile() && !fs.existsSync(to)) { fs.copyFileSync(from, to); fs.chmodSync(to, 0o600) }
     }
     fs.writeFileSync(path.join(dir, 'MIGRATED_FROM.txt'), legacy + '\n', { mode: 0o600 })
   }
