@@ -330,7 +330,7 @@ function showCreate(host) {
   $('create-project').value = selected()?.project || localStorage.getItem('last-project:' + $('create-host').value) || info?.initialProject || ''
   $('create-error').textContent = ''; $('create-dialog').showModal(); $('create-name').focus()
   projectInput.prefetch(); projectInput.refresh()
-  $('create-save-project').checked = false; delete $('create-target').dataset.touched; scheduleBranches()
+  $('create-save-project').checked = false; delete $('create-target').dataset.touched; delete $('create-base').dataset.touched; scheduleBranches()
   $('create-save-default').checked = false; fillLaunch(true)
 }
 // ---- launch arguments: permission preset + extra args passed through as argv ----
@@ -391,12 +391,15 @@ async function loadBranches() {
   try {
     const r = await hub.branches(host, project)
     if (my !== branchSeq) return
+    const previous = select.value
     select.replaceChildren()
     const head = node('option', `当前检出：${r.current || '（detached HEAD）'}`); head.value = ''; select.append(head)
     const group = (label, items) => { if (!items.length) return; const g = document.createElement('optgroup'); g.label = label; for (const b of items) { const o = node('option', b.name); o.value = b.name; o.title = `${b.sha} ${b.subject}`; g.append(o) } select.append(g) }
     group('本地分支', r.local); group('远端跟踪分支', r.remote)
     const names = new Set([...r.local, ...r.remote].map(b => b.name))
-    select.value = r.defaults.base && names.has(r.defaults.base) ? r.defaults.base : ''
+    // Keep a start branch the user picked by hand if the new list still has it.
+    const picked = select.dataset.touched && previous
+    select.value = picked && names.has(picked) ? picked : r.defaults.base && names.has(r.defaults.base) ? r.defaults.base : ''
     $('create-target-list').replaceChildren(...[...new Set([...r.local.map(b => b.name), ...r.remote.map(b => b.name.replace(/^origin\//, ''))])].slice(0, 200).map(n => { const o = document.createElement('option'); o.value = n; return o }))
     if (!$('create-target').dataset.touched) $('create-target').value = r.defaults.prTarget || ''
     updateBranchHint()
@@ -547,7 +550,7 @@ $('create-preset').onchange = updateLaunchPreview; $('create-args').oninput = up
 $('launch-reset').onclick = () => action(async () => { launchConfig = await hub.resetLaunchDefault($('create-tool').value); fillLaunch(true); toast('已恢复该工具的内置默认启动方式') })
 $('create-project').addEventListener('change', scheduleBranches); $('create-project').addEventListener('input', scheduleBranches)
 $('create-worktree').addEventListener('change', scheduleBranches)
-$('create-base').onchange = updateBranchHint
+$('create-base').onchange = () => { $('create-base').dataset.touched = '1'; updateBranchHint() }
 $('create-target').oninput = () => { $('create-target').dataset.touched = '1'; updateBranchHint() }
 $('create-host').onchange = () => { updateTransport(); scheduleBranches(); $('create-project').value = localStorage.getItem('last-project:' + $('create-host').value) || ($('create-host').value === info?.initialHost ? info.initialProject : '') ; projectInput.prefetch(); projectInput.refresh() }
 $('filter').oninput = renderList

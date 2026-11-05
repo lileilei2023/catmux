@@ -366,7 +366,9 @@
     }
     // The project folder itself is the first row, so a subfolder that happens to
     // be called e.g. "workspace" is never mistaken for the root.
-    const rootPath = rootPathOf(w), rootName = rootPath.split('/').filter(Boolean).pop() || '/'
+    // A task worktree directory is named by its task id; show the project instead.
+    const rootPath = rootPathOf(w), s = session()
+    const rootName = s?.worktree && w.rootKey === 'cwd' && s.project ? `${s.project.split('/').filter(Boolean).pop()} · worktree` : rootPath.split('/').filter(Boolean).pop() || '/'
     const head = node('button', null, 'tree-row tree-root'); head.dataset.path = ''
     head.append(node('span', '▾', 'caret'), node('span', rootName, 'name'))
     const info = w.deepInfo
