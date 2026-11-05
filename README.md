@@ -20,6 +20,13 @@ Codex、Claude Code 或普通终端会话：中间是真实的远端终端，左
 curl -fsSL https://raw.githubusercontent.com/lileilei2023/catmux/main/install.sh | bash
 ```
 
+如果 `raw.githubusercontent.com` 访问不了（国内网络常见），用 git（SSH 或 HTTPS 均可）克隆后在仓库里运行安装脚本，效果相同：
+
+```zsh
+git clone git@github.com:lileilei2023/catmux.git ~/.local/share/catmux/app
+~/.local/share/catmux/app/install.sh
+```
+
 需要 Node.js ≥ 18、`python3`、`git`、`ssh`（缺少时安装脚本会提示）。可选：`tmux`（使用“本机”设备）、
 `tssh`（`brew install trzsz-ssh`，UDP 漫游连接）、`gh`（结束任务时查 PR / 开 PR）。
 

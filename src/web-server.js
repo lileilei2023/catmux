@@ -64,9 +64,11 @@ async function body(req, limit) {
 }
 
 async function createWebServer(options = {}) {
-  const dataDir = options.dataDir || process.env.CATMUX_DATA || process.env.AIHUB_WEB_DATA || defaultDataDir()
+  // Only resolve (and possibly migrate) the real data directory when this server
+  // owns its storage; an injected store/service (tests, embedding) never touches HOME.
+  const dataDir = options.dataDir || process.env.CATMUX_DATA || process.env.AIHUB_WEB_DATA || (options.store ? null : defaultDataDir())
   const store = options.store || new JsonStore(dataDir)
-  const service = options.service || new RemoteService(store, new LaunchSettings(path.join(dataDir, 'launch-settings.json')), new ProjectSettings(path.join(dataDir, 'project-settings.json')))
+  const service = options.service || new RemoteService(store, new LaunchSettings(dataDir && path.join(dataDir, 'launch-settings.json')), new ProjectSettings(dataDir && path.join(dataDir, 'project-settings.json')))
   const connections = options.connections || new RemoteConnections(service)
   const clients = new Set(), confirmations = new Map()
   const cookie = crypto.randomBytes(32).toString('hex'), csrf = crypto.randomBytes(32).toString('hex')

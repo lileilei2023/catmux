@@ -235,3 +235,15 @@ test('first start migrates session records and settings from the old "AI Hub Web
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'project-settings.json'), 'utf8'))['macmini\n/p'], { base: 'develop', prTarget: 'develop' })
   assert(fs.existsSync(path.join(legacy, 'remote-sessions.json')), 'old directory left untouched')
 })
+
+test('a server with an injected store never resolves or migrates the real data directory', async t => {
+  const realHome = process.env.HOME
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'catmux-nohome-')))
+  process.env.HOME = home
+  t.after(() => { process.env.HOME = realHome; fs.rmSync(home, { recursive: true, force: true }) })
+  const legacy = path.join(home, 'Library', 'Application Support', 'AI Hub Web')
+  fs.mkdirSync(legacy, { recursive: true }); fs.writeFileSync(path.join(legacy, 'remote-sessions.json'), '[]')
+  const f = await fixture(t)
+  assert.equal(f.server.address().address, '127.0.0.1')
+  assert(!fs.existsSync(path.join(home, 'Library', 'Application Support', 'Catmux')), 'no Catmux directory created in HOME')
+})
