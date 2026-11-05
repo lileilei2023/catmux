@@ -1,0 +1,250 @@
+#!/bin/zsh
+# Catmux — start / stop / open / update the local backend.
+# The backend listens on 127.0.0.1 only; agents live in tmux on each device and
+# are never stopped by anything here.
+emulate -L zsh
+set -euo pipefail
+
+ROOT=${CATMUX_ROOT:-${0:A:h:h}}
+PORT=${CATMUX_PORT:-${AIHUB_WEB_PORT:-48731}}
+URL="http://127.0.0.1:$PORT/"
+LABEL=com.catmux.web
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOG="$HOME/Library/Logs/catmux.log"
+APP="$HOME/Applications/Catmux.app"
+DOMAIN="gui/$(id -u)"
+# Previous name of this project (AI Hub): migrated away on install.
+LEGACY_LABEL=com.aihub.remote.web
+LEGACY_APP="$HOME/Applications/AI Hub.app"
+
+pid() { lsof -tnP -iTCP:$PORT -sTCP:LISTEN 2>/dev/null | head -1 || true }
+healthy() { curl -fsS -m 2 -o /dev/null "${URL}api/bootstrap" 2>/dev/null }
+loaded() { launchctl print "$DOMAIN/${1:-$LABEL}" >/dev/null 2>&1 }
+wait_up() { for _ in {1..60}; do healthy && return 0; sleep 0.25; done; return 1 }
+wait_down() { local p=$1; for _ in {1..40}; do kill -0 $p 2>/dev/null || return 0; sleep 0.25; done; return 1 }
+version() { sed -n 's/^  "version": "\(.*\)",/\1/p' "$ROOT/package.json" | head -1 }
+
+write_plist() { # $1 = true|false (start at login)
+  mkdir -p "${PLIST:h}" "${LOG:h}"
+  local keep=''
+  [[ $1 == true ]] && keep='<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>'
+  cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/zsh</string><string>-lc</string><string>cd ${(q)ROOT} &amp;&amp; exec node src/web-server.js</string>
+  </array>
+  <key>RunAtLoad</key><$1/>
+  $keep
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOG</string>
+  <key>StandardErrorPath</key><string>$LOG</string>
+</dict></plist>
+PL
+  plutil -lint "$PLIST" >/dev/null
+}
+reload_agent() { launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true; launchctl bootstrap "$DOMAIN" "$PLIST" }
+
+start() {
+  if healthy; then echo "已在运行：$URL (PID $(pid))"; return 0; fi
+  if [[ -n $(pid) ]]; then echo "端口 $PORT 被其他进程占用 (PID $(pid))，未启动" >&2; return 1; fi
+  if [[ -f $PLIST ]]; then
+    loaded || launchctl bootstrap "$DOMAIN" "$PLIST"
+    launchctl kickstart "$DOMAIN/$LABEL"
+  else
+    mkdir -p "${LOG:h}"
+    (cd "$ROOT" && nohup zsh -lc 'exec node src/web-server.js' </dev/null >>"$LOG" 2>&1 &)
+  fi
+  if wait_up; then echo "已启动：$URL (PID $(pid))"; else echo "启动失败，查看日志：$LOG" >&2; tail -5 "$LOG" >&2; return 1; fi
+}
+stop() {
+  local p=$(pid)
+  if [[ -z $p ]]; then echo "未在运行"; return 0; fi
+  # SIGTERM → graceful close (exit 0), so launchd does not restart it.
+  if loaded; then launchctl kill SIGTERM "$DOMAIN/$LABEL" 2>/dev/null || kill -TERM $p
+  elif loaded $LEGACY_LABEL; then launchctl kill SIGTERM "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || kill -TERM $p
+  else kill -TERM $p; fi
+  wait_down $p && echo "已停止本机后端（各设备上的会话保留）" || { echo "进程 $p 未退出" >&2; return 1; }
+}
+pwa_app() { local a=( "$HOME/Applications/Chrome Apps.localized"/(Catmux|AI\ Hub)*.app(N) ); (( ${#a} )) && print -r -- "${a[1]}" }
+open_app() {
+  start >/dev/null || { start; return 1; }
+  # Prefer the installed Chrome web app (its own window and Dock icon).
+  local pwa=$(pwa_app)
+  if [[ -n $pwa ]]; then open "$pwa"
+  elif [[ -d "/Applications/Google Chrome.app" ]]; then open -na "Google Chrome" --args --app="$URL"
+  else open "$URL"; fi
+}
+status() {
+  local p=$(pid)
+  echo "Catmux $(version) · $ROOT"
+  if healthy; then echo "运行中：$URL (PID $p)"; elif [[ -n $p ]]; then echo "端口 $PORT 被占用但不是 Catmux (PID $p)"; else echo "未运行"; fi
+  if [[ -f $PLIST ]]; then
+    grep -q '<key>RunAtLoad</key><true/>' "$PLIST" && echo "开机自启：开" || echo "开机自启：关（按需启动）"
+  else echo "开机自启：未安装 launchd 服务（catmux install）"; fi
+  [[ -d $APP ]] && echo "启动器：$APP"
+  echo "日志：$LOG"
+}
+doctor() {
+  local ok=true
+  check() { if command -v $1 >/dev/null 2>&1; then printf '  ✓ %-8s %s\n' $1 "$(command -v $1)"; else printf '  %s %-8s %s\n' "$2" $1 "$3"; [[ $2 == ✗ ]] && ok=false; fi; return 0 }
+  echo "Catmux $(version) 依赖检查："
+  if command -v node >/dev/null 2>&1; then
+    local v=$(node -p 'process.versions.node'); (( ${v%%.*} >= 18 )) && echo "  ✓ node     $v" || { echo "  ✗ node     $v（需要 18 或更高）"; ok=false }
+  else echo "  ✗ node     未安装（brew install node）"; ok=false; fi
+  check python3 ✗ '未安装（xcode-select --install 或 brew install python）'
+  check ssh ✗ '未安装'
+  check git ✗ '未安装（xcode-select --install）'
+  check tmux · '可选：没有它“本机”设备不可用（brew install tmux）'
+  check tssh · '可选：UDP 漫游连接（brew install trzsz-ssh）'
+  check gh · '可选：结束任务时查 PR / 开 PR（brew install gh）'
+  $ok
+}
+make_launcher() {
+  local tmp=$(mktemp -d)
+  osacompile -o "$tmp/Catmux.app" -e "do shell script \"/bin/zsh -lc \" & quoted form of \"${ROOT}/bin/catmux open\"" 2> >(grep -v 'replacing existing signature' >&2)
+  cp "$ROOT/web/AppIcon.icns" "$tmp/Catmux.app/Contents/Resources/applet.icns"
+  # Newer osacompile also writes an asset catalog (Assets.car + CFBundleIconName),
+  # which macOS prefers over applet.icns — drop it so our icon is the one shown.
+  rm -f "$tmp/Catmux.app/Contents/Resources/Assets.car"
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$tmp/Catmux.app/Contents/Info.plist" 2>/dev/null || true
+  # The icon changed after osacompile signed it; re-seal our own local applet.
+  codesign --force --sign - "$tmp/Catmux.app" >/dev/null 2>&1 || true
+  mkdir -p "${APP:h}"; rm -rf "$APP"; mv "$tmp/Catmux.app" "$APP"; rmdir "$tmp"
+  touch "$APP"   # make Finder / Dock / Spotlight pick up the new icon
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
+}
+# Switch the app icon among the pre-rendered themes in web/icon-themes/.
+set_icon() {
+  local theme=$ROOT/web/icon-themes/${1:-}
+  if [[ -z ${1:-} || ! -f $theme/AppIcon.icns ]]; then echo "用法：catmux icon $(print -r -- $ROOT/web/icon-themes/*(/N:t) | tr ' ' '|')" >&2; return 2; fi
+  cp "$theme/icon-1024.png" "$ROOT/web/icon-1024.png"; cp "$theme/icon-512.png" "$ROOT/web/icon-512.png"
+  cp "$theme/icon-192.png" "$ROOT/web/icon-192.png"; cp "$theme/AppIcon.icns" "$ROOT/web/AppIcon.icns"
+  cp "$theme/icon.svg" "$ROOT/web/icon.svg"
+  [[ -d $APP ]] && make_launcher
+  killall Dock 2>/dev/null || true
+  echo "图标已切换为 ${1}。已安装的 Chrome 应用会在 Chrome 下次检查 manifest 时更新图标（或重新安装一次）。"
+}
+# Dock tiles: replace a tile pointing at $1 with $2 (or append $2). Backs up first.
+dock_set() {
+  local from=${1:-} to=$2
+  cp "$HOME/Library/Preferences/com.apple.dock.plist" "$HOME/Library/Preferences/com.apple.dock.plist.catmux-bak.$(date +%Y%m%d%H%M%S)"
+  /usr/bin/python3 - "$from" "$to" <<'PY'
+import plistlib, sys, os, urllib.parse
+src, dst = sys.argv[1], sys.argv[2]
+path = os.path.expanduser('~/Library/Preferences/com.apple.dock.plist')
+with open(path, 'rb') as f: dock = plistlib.load(f)
+apps = dock.setdefault('persistent-apps', [])
+url = lambda p: 'file://' + urllib.parse.quote(p.rstrip('/')) + '/'
+tile = lambda p: {'tile-data': {'file-data': {'_CFURLString': url(p), '_CFURLStringType': 15}}, 'tile-type': 'file-tile'}
+def points(t, p): return t.get('tile-data', {}).get('file-data', {}).get('_CFURLString') == url(p)
+if any(points(t, dst) for t in apps): print('already'); sys.exit(0)
+for i, t in enumerate(apps):
+    if src and points(t, src): apps[i] = tile(dst); break
+else: apps.append(tile(dst))
+with open(path, 'wb') as f: plistlib.dump(dock, f)
+print('updated')
+PY
+  killall Dock 2>/dev/null || true
+}
+dock() {
+  local target=$(pwa_app); [[ -z $target ]] && target=$APP
+  [[ -d $target ]] || { echo "找不到 $target，先运行 catmux install" >&2; return 1 }
+  [[ $(dock_set "" "$target") == already ]] && echo "已在 Dock：${target:t}" || echo "已固定到 Dock：${target:t}"
+}
+# One-time move from the project's previous name (AI Hub). Data directories are
+# migrated by the server itself; device-side paths (~/.local/share/ai-hub,
+# aihub-* tmux sessions, aihub/* branches) intentionally stay as they are.
+migrate_legacy() {
+  local moved=()
+  if loaded $LEGACY_LABEL; then
+    launchctl kill SIGTERM "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || true
+    for _ in {1..40}; do [[ -z $(pid) ]] && break; sleep 0.25; done
+    launchctl bootout "$DOMAIN/$LEGACY_LABEL" 2>/dev/null || true; moved+=('旧 launchd 服务')
+  fi
+  [[ -f $HOME/Library/LaunchAgents/$LEGACY_LABEL.plist ]] && rm -f "$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+  if [[ -L $HOME/.local/bin/ai-hub ]]; then rm -f "$HOME/.local/bin/ai-hub"; moved+=('ai-hub 命令链接'); fi
+  if [[ -d $LEGACY_APP ]]; then
+    defaults read com.apple.dock persistent-apps 2>/dev/null | grep -Fq 'AI%20Hub.app' && dock_set "$LEGACY_APP" "$APP" >/dev/null && moved+=('Dock 图标')
+    rm -rf "$LEGACY_APP"; moved+=('AI Hub.app 启动器')
+  fi
+  (( ${#moved} )) && echo "已从 AI Hub 迁移：${(j:、:)moved}"
+  return 0
+}
+install() {
+  doctor >/dev/null || { doctor; echo "请先补齐上面标 ✗ 的依赖" >&2; return 1 }
+  mkdir -p "$HOME/.local/bin"
+  local was=$(pid)
+  [[ -n $was ]] && ! loaded && stop        # hand a manual backend over to launchd
+  local login=false; [[ -f $PLIST ]] && grep -q '<key>RunAtLoad</key><true/>' "$PLIST" && login=true
+  make_launcher
+  migrate_legacy
+  ln -sf "$ROOT/bin/catmux" "$HOME/.local/bin/catmux"
+  write_plist $login; reload_agent
+  [[ -n $was ]] && start
+  echo "已安装 Catmux $(version)：命令 ~/.local/bin/catmux，启动器 $APP，launchd 服务 $LABEL（开机自启：$([[ $login == true ]] && echo 开 || echo 关)）"
+  [[ :$PATH: == *:$HOME/.local/bin:* ]] || echo "提示：把 ~/.local/bin 加入 PATH，例如：echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zprofile"
+  return 0
+}
+update() {
+  [[ -d $ROOT/.git ]] || { echo "这份 Catmux 不是 git 安装，请重新运行安装脚本" >&2; return 1 }
+  local before=$(git -C "$ROOT" rev-parse --short HEAD)
+  git -C "$ROOT" fetch --quiet origin
+  git -C "$ROOT" merge --ff-only --quiet '@{upstream}' || { echo "本地有改动或分叉，未更新（git -C $ROOT status 查看）" >&2; return 1 }
+  local after=$(git -C "$ROOT" rev-parse --short HEAD)
+  if [[ $before == $after ]]; then echo "已是最新：Catmux $(version) ($after)"; return 0; fi
+  make_launcher
+  if [[ -n $(pid) ]]; then stop; start; fi
+  echo "已更新：$before → $after（Catmux $(version)）。已打开的窗口会提示刷新。"
+}
+uninstall() {
+  stop || true
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+  rm -f "$PLIST"; rm -rf "$APP"
+  [[ -L $HOME/.local/bin/catmux ]] && rm -f "$HOME/.local/bin/catmux"
+  echo "已移除 launchd 服务、启动器与命令链接。程序文件 $ROOT、数据（~/Library/Application Support/Catmux）与各设备上的会话保留。"
+}
+autostart() {
+  case ${1:-} in
+    on|off) ;;
+    *) echo "用法：catmux autostart on|off" >&2; return 2 ;;
+  esac
+  local running=$(pid)
+  [[ -n $running ]] && stop
+  write_plist $([[ $1 == on ]] && echo true || echo false); reload_agent
+  [[ -n $running || $1 == on ]] && start
+  echo "开机自启已$([[ $1 == on ]] && echo 开启 || echo 关闭)"
+}
+
+case ${1:-help} in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status) status ;;
+  open) open_app ;;
+  doctor) doctor ;;
+  update) update ;;
+  dock) dock ;;
+  launcher) make_launcher; echo "已重建启动器：$APP" ;;
+  icon) set_icon ${2:-} ;;
+  logs) tail -n 50 -f "$LOG" ;;
+  install) install ;;
+  uninstall) uninstall ;;
+  autostart) autostart ${2:-} ;;
+  version|--version|-v) echo "Catmux $(version)" ;;
+  *) cat <<USAGE
+Catmux $(version) — 本机 + SSH 设备上的 tmux / AI CLI 工作台（仅 127.0.0.1:$PORT）
+  catmux open        启动（如需要）并打开应用窗口
+  catmux start|stop|restart|status|logs
+  catmux update      更新到最新版本
+  catmux doctor      检查依赖
+  catmux autostart on|off   登录后自动启动后端（默认关）
+  catmux icon cat|robot|cloud|classic   切换图标
+  catmux dock        固定到 Dock
+  catmux install     安装命令链接、launchd 服务与“应用程序/Catmux”启动器
+  catmux uninstall   移除以上安装项（不动程序文件、数据和各设备上的会话）
+USAGE
+  ;;
+esac

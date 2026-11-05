@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Catmux</title>
+  <meta name="theme-color" content="#101114">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="src/remote.css">
+  <script defer src="vendor/xterm.js"></script>
+  <script defer src="vendor/addon-fit.js"></script>
+  <script defer src="vendor/addon-unicode11.js"></script>
+  <script defer src="vendor/highlight.min.js"></script>
+  <script defer src="src/web-bridge.js"></script>
+  <script defer src="src/remote-menu.js"></script>
+  <script defer src="src/remote-pathinput.js"></script>
+  <script defer src="src/remote-endtask.js"></script>
+  <script defer src="src/remote-workbench.js"></script>
+  <script defer src="src/remote-renderer.js"></script>
+</head>
+<body class="booting">
+<div id="app" class="app">
+  <!-- Left: hosts and sessions. Collapsible / resizable. -->
+  <aside id="pane-left" class="pane pane-left" aria-label="会话列表">
+    <div class="pane-head brand">
+      <span class="brand-dot"></span><span class="brand-name">Catmux</span>
+      <button id="collapse-left" class="icon-btn" title="收起会话栏 (⌘B)" aria-label="收起会话栏">⟨</button>
+    </div>
+    <div class="sidebar-body">
+      <button id="new-session" class="primary full" disabled>＋ 新建会话 · 本机或远端 <kbd>⌘N</kbd></button>
+      <label class="host-label" for="host">设备 · 本机 + SSH config</label>
+      <select id="host" aria-label="远程主机" disabled><option value="">正在读取本机 SSH 配置…</option></select>
+      <div id="backend-status" class="backend-status" role="status">正在连接本机后端…</div>
+      <div class="host-actions"><button id="probe" disabled>检查环境</button><button id="discover" disabled>发现已有会话</button><button id="refresh-hosts" title="重新读取 SSH config">↻</button></div>
+      <input id="filter" class="filter" placeholder="筛选会话、项目、工具…" aria-label="筛选会话">
+      <div id="session-list" class="session-list"></div>
+    </div>
+    <footer><span class="security-dot"></span> SSH / Tailscale only<br><small>终端与模型请求都在远端执行</small></footer>
+  </aside>
+  <div id="resize-left" class="resizer" role="separator" aria-orientation="vertical" aria-label="调整会话栏宽度" tabindex="0"></div>
+
+  <!-- Center: the one real remote terminal. Always visible. -->
+  <main id="pane-center" class="pane-center">
+    <header class="toolbar">
+      <button id="expand-left" class="icon-btn pane-toggle" title="展开会话栏 (⌘B)" aria-label="展开会话栏">☰</button>
+      <div class="title-block"><span class="eyebrow" id="session-host">LOCAL CONTROL / TMUX ON ANY DEVICE</span><h2 id="session-name">你的 tmux / AI 工作台</h2></div>
+      <div class="toolbar-actions">
+        <span id="connection" class="status">未连接</span>
+        <button id="connect" disabled>连接</button><button id="disconnect" disabled>断开</button>
+        <button id="stop" class="danger" disabled>停止远端</button><button id="forget" disabled title="只移除本机记录">移除</button>
+      </div>
+      <button id="expand-right" class="icon-btn pane-toggle" title="展开文件 / Git 面板 (⌘⌥B)" aria-label="展开文件与 Git 面板">▤</button>
+    </header>
+    <div class="subbar">
+      <span id="remote-cwd" class="cwd">本机仅负责显示与管理</span>
+      <div class="terminal-tools" role="group" aria-label="终端显示设置">
+        <button id="terminal-font-smaller" aria-label="缩小终端字号" title="缩小终端字号，不调整页面缩放">A−</button><output id="terminal-font-size" aria-live="polite">14 px</output><button id="terminal-font-larger" aria-label="放大终端字号" title="放大终端字号，不调整页面缩放">A＋</button><button id="terminal-font-reset" aria-label="重置终端字号" title="恢复 Menlo 14 px">↺</button>
+        <button id="terminal-focus" aria-pressed="false" disabled title="收起两侧面板，直接操作同一个远端 tmux">专注</button>
+        <button id="attach" disabled title="通过独立 SSH 上传到远端私有目录">↑ 上传</button>
+      </div>
+    </div>
+    <section id="workspace">
+      <div id="welcome"><div class="welcome-mark">↗</div><div class="eyebrow">一个窗口，所有远端 Agent</div><h2>打开一个远程工作空间</h2><p>选择本机或任意 SSH 设备上的项目，启动 Codex、Claude 或终端。<br>窗口关闭、连接中断时，会话仍留在该设备的 tmux 里。</p><button id="welcome-create" class="primary" disabled>新建第一个 Agent</button><div class="feature-grid"><div><b>01 / 本机管理</b><span>会话、项目、分组统一保存</span></div><div><b>02 / 远端执行</b><span>官方 CLI 与独立 git worktree</span></div><div><b>03 / 安全连接</b><span>固定主机校验，无公网端口</span></div></div></div>
+      <div id="terminal-deck" hidden></div>
+    </section>
+    <div id="upload-result" hidden><img id="upload-thumb" alt="" hidden><span id="upload-host" class="host-tag"></span><span id="upload-path"></span><button id="copy-upload">复制路径</button><button id="insert-upload">插入路径（不发送）</button><button id="dismiss-upload" aria-label="关闭">×</button></div>
+    <div class="statusbar"><span id="status-detail">远端主机需要保持开机</span><span class="shortcut-hint">⌥拖动 选择文字 · ⌘C 复制 · ⌘B 会话栏 · ⌘⌥B 文件/Git · ⌘S 保存</span></div>
+  </main>
+
+  <div id="resize-right" class="resizer" role="separator" aria-orientation="vertical" aria-label="调整文件面板宽度" tabindex="0"></div>
+  <!-- Right: remote files, editor and per-file Git diff. Collapsible / resizable. -->
+  <aside id="pane-right" class="pane pane-right" aria-label="远端文件与 Git">
+    <div class="pane-head right-head">
+      <div class="segmented" role="tablist">
+        <button id="view-files" class="seg active" role="tab" aria-selected="true" data-view="files">文件</button>
+        <button id="view-git" class="seg" role="tab" aria-selected="false" data-view="git">变更 <span id="git-count" class="count" hidden></span></button>
+      </div>
+      <span class="spacer"></span>
+      <button id="wb-refresh" class="icon-btn" title="刷新" aria-label="刷新">↻</button>
+      <button id="wb-wide" class="icon-btn" title="加宽面板" aria-label="加宽面板" aria-pressed="false">⇔</button>
+      <button id="collapse-right" class="icon-btn" title="收起面板 (⌘⌥B)" aria-label="收起文件与 Git 面板">⟩</button>
+    </div>
+    <div id="wb-empty" class="wb-empty">选择左侧会话后，这里显示远端项目文件、编辑器与 Git 变更。</div>
+    <div id="wb-body" class="wb-body" hidden>
+      <div class="root-bar"><select id="wb-root" aria-label="浏览的远端目录"></select><span id="wb-sync" class="sync" role="status"></span></div>
+      <div id="wb-root-path" class="root-path"></div>
+      <p id="wb-root-hint" class="root-hint" hidden></p>
+      <section id="explorer" class="explorer">
+        <div id="files-view" class="tree" role="tree" aria-label="远端项目文件"></div>
+        <div id="git-view" class="changes" hidden></div>
+      </section>
+      <div id="resize-viewer" class="hresizer" role="separator" aria-orientation="horizontal" aria-label="调整列表高度" tabindex="0"></div>
+      <section id="viewer" class="viewer">
+        <div id="doc-tabs" class="doc-tabs" role="tablist"></div>
+        <div id="doc-head" class="doc-head" hidden>
+          <span id="doc-path" class="doc-path"></span>
+          <span class="spacer"></span>
+          <span id="doc-actions" class="doc-actions"></span>
+          <button id="viewer-max" class="icon-btn" title="最大化查看区" aria-pressed="false" aria-label="最大化查看区">⤢</button>
+        </div>
+        <div id="doc-body" class="doc-body"><div class="doc-placeholder">点击文件预览 / 编辑，点击变更查看 diff。<br><small>编辑需显式进入；保存前校验远端版本并私有备份。</small></div></div>
+      </section>
+    </div>
+  </aside>
+</div>
+  <dialog id="create-dialog"><form id="create-form"><div class="eyebrow">NEW SESSION</div><h2>新建会话</h2><p class="muted">选择设备：本机（本地 tmux）或 SSH 设备。CLI 在所选设备上运行，本工具不登录、不调用模型。</p><label>名称<input id="create-name" required maxlength="100" value="Codex 工作空间"></label><label>设备<select id="create-host" required></select></label><label for="create-project">远端项目路径 · 支持 ~/</label><div class="path-field"><input id="create-project" required placeholder="~/workspace/my-project"><div id="project-suggest" class="suggest" role="listbox" aria-label="远端目录候选" hidden></div></div><small id="project-hint" class="path-hint" aria-live="polite"></small><div class="form-row"><label>官方工具<select id="create-tool"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="gemini">Gemini CLI</option><option value="shell">远程 Shell</option></select></label><label>连接方式<select id="create-transport"><option value="udp">tssh UDP · 自动漫游</option><option value="ssh">SSH TCP · 明确选择</option></select></label></div><div id="launch-block"><div class="form-row"><label>权限模式<select id="create-preset"></select></label><label>额外参数 · 原样透传<input id="create-args" placeholder="例如 -m gpt-5 --search" spellcheck="false" autocomplete="off"></label></div><p id="launch-preview" class="launch-preview"></p><div class="launch-options"><label class="checkbox inline"><input type="checkbox" id="create-save-default">设为该工具的默认启动方式</label><button type="button" id="launch-reset" class="link">恢复内置默认</button></div></div><label>分组<input id="create-group" placeholder="例如：研发 / 日常"></label><label class="checkbox"><input type="checkbox" id="create-worktree" checked>创建独立 git worktree 与分支</label><p class="muted" id="worktree-hint">会在远端私有目录创建工作副本；不移动、重置原项目。非 Git 目录不会自动初始化。</p><div id="branch-block" class="branch-block" hidden><div class="form-row"><label>起点分支<select id="create-base"><option value="">读取分支…</option></select></label><label>PR 目标分支<input id="create-target" list="create-target-list" placeholder="例如 develop" spellcheck="false" autocomplete="off"><datalist id="create-target-list"></datalist></label></div><p id="branch-hint" class="path-hint"></p><label class="checkbox inline"><input type="checkbox" id="create-save-project">保存为该项目默认（起点 / PR 目标）</label></div><p id="create-error" class="error" role="alert"></p><div class="dialog-actions"><button type="button" id="create-cancel">取消</button><button type="submit" id="create-submit" class="primary">创建并连接</button></div></form></dialog>
+  <dialog id="end-dialog"><div class="panel-heading"><div><div class="eyebrow">END TASK</div><h2 id="end-title">结束任务</h2></div><button id="end-close" type="button">关闭</button></div><div id="end-body"></div></dialog>
+  <dialog id="info-dialog"><div class="panel-heading"><h2 id="info-title">远端环境</h2><button id="info-close">关闭</button></div><div id="info-content"></div></dialog>
+  <div id="toast" hidden role="status"></div>
+</body>
+</html>

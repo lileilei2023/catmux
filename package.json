@@ -1,0 +1,23 @@
+{
+  "name": "catmux",
+  "version": "1.0.0",
+  "description": "A local web workbench for tmux sessions and AI coding CLIs (Codex, Claude Code) on this Mac and any SSH device.",
+  "private": true,
+  "main": "src/web-server.js",
+  "bin": {
+    "catmux": "bin/catmux"
+  },
+  "scripts": {
+    "start": "node src/web-server.js",
+    "test": "node --test test/*.test.js",
+    "test:web": "node test/web-browser.js",
+    "test:live": "node test/web-live-readonly.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "license": "MIT"
+}
