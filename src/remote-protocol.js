@@ -136,4 +136,6 @@ function attachmentName(name) {
   return base
 }
 
-module.exports = { branchName, LOCAL, TERMINAL_FEATURES, LAUNCH_PRESETS, LAUNCH_DEFAULTS, launchArgs, launchFor, commandLine, TOOLS, SAFE_SSH, text, hostAlias, remotePath, workspacePath, sessionId, quote, loginCommand, newSession, attachSpec, attachmentRef, retryDelay, attachmentName }
+// How long tssh may keep failing to reconnect before Catmux replaces it.
+const TSSH_TAKEOVER_MS = 25000
+module.exports = { TSSH_TAKEOVER_MS, branchName, LOCAL, TERMINAL_FEATURES, LAUNCH_PRESETS, LAUNCH_DEFAULTS, launchArgs, launchFor, commandLine, TOOLS, SAFE_SSH, text, hostAlias, remotePath, workspacePath, sessionId, quote, loginCommand, newSession, attachSpec, attachmentRef, retryDelay, attachmentName }

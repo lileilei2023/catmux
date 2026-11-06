@@ -47,8 +47,27 @@ class RemoteConnections extends EventEmitter {
       const proc = this.createPty(spec.file, spec.args)
       link.proc = proc
       let handshake = '', confirmed = false, fatal = false
+      // tssh roams over UDP and retries on its own. After the device rebooted its
+      // tsshd is gone and those retries never succeed ("read auth packet failed"):
+      // take over, so a fresh check reattaches or reports the session missing.
+      const lost = { first: 0, normal: 0, timer: null }
+      const takeOver = why => {
+        if (generation !== link.generation || link.respawn) return
+        clearTimeout(lost.timer); link.respawn = why
+        try { proc.kill() } catch {}
+      }
       proc.on('data', data => {
         if (generation !== link.generation) return
+        if (s.transport === 'udp' && confirmed) {
+          const now = Date.now()
+          if (/Last reconnect error|connection to the server was lost/i.test(data)) {
+            if (/connection refused/i.test(data)) takeOver('远端 tsshd 已不在（设备可能重启过）')
+            else if (!lost.first) {
+              lost.first = now
+              lost.timer = setTimeout(() => { if (lost.normal > lost.first) lost.first = 0; else takeOver('tssh 持续重连失败') }, P.TSSH_TAKEOVER_MS)
+            }
+          } else lost.normal = now
+        }
         link.tail = (link.tail + data).slice(-128 * 1024)
         handshake = (handshake + data).slice(-2048)
         if (!confirmed && /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|unable to authenticate|ssh:.*Permission denied/i.test(handshake)) fatal = true
@@ -61,8 +80,9 @@ class RemoteConnections extends EventEmitter {
       proc.on('error', error => { if (generation === link.generation) { fatal = true; this.setState(id, link, 'blocked', error.message); proc.kill() } })
       proc.on('exit', ({ exitCode }) => {
         if (generation !== link.generation) return
-        link.proc = null; clearTimeout(link.stable)
+        link.proc = null; clearTimeout(link.stable); clearTimeout(lost.timer)
         if (!link.desired || this.shuttingDown) return
+        if (link.respawn) { const why = link.respawn; link.respawn = null; this.retry(id, link, why); return }
         if (!exitCode || fatal) { link.desired = false; this.setState(id, link, fatal ? 'blocked' : 'detached', fatal ? '客户端校验/运行失败，停止自动重试' : '连接正常退出，远端会话保留'); return }
         this.retry(id, link, `连接进程退出 (${exitCode})`)
       })

@@ -211,3 +211,51 @@ exec(compile(source,'real-revive-protocol','exec'))
     fs.rmSync(fixture, { recursive: true, force: true })
   }
 })
+
+// Device rebooted: its tsshd is gone and tssh retries forever. Catmux replaces
+// the stuck client, re-checks the session and reports it missing (revivable).
+test('tssh stuck reconnecting after a reboot is replaced; a recovered tssh is left alone', async () => {
+  const { RemoteConnections } = require('../src/remote-connections')
+  const { EventEmitter } = require('node:events')
+  const saved = P.TSSH_TAKEOVER_MS; P.TSSH_TAKEOVER_MS = 150
+  try {
+    const { service, rows } = mockService(), s = ready(service, rows)
+    service.bins = { ssh: '/usr/bin/ssh', tssh: '/usr/bin/true' }
+    let alive = true, inspects = 0
+    service.inspect = async () => { inspects++; return alive ? { name: s.tmux, dead: false } : null }
+    const procs = []
+    const links = new RemoteConnections(service, () => {
+      const p = new EventEmitter(); p.killed = false
+      p.resize = () => {}; p.write = () => {}; p.kill = () => { p.killed = true; setImmediate(() => p.emit('exit', { exitCode: null })) }
+      procs.push(p); return p
+    })
+    const states = []; links.on('event', e => { if (e.type === 'state') states.push(e.status) })
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    await links.connect(s.id)
+    procs[0].emit('data', `\x1b]777;AIHUB_READY:${s.id}\x07`)
+    assert.equal(links.snapshot(s.id).status, 'connected')
+    // A short network blip: tssh reports a failure, then tmux output resumes.
+    procs[0].emit('data', 'Oops, looks like the connection to the server was lost, trying to reconnect...\r\nLast reconnect error: read auth packet failed: i/o timeout')
+    await wait(50); procs[0].emit('data', '\x1b[1;1Hnormal tmux output')
+    await wait(200)
+    assert.equal(procs[0].killed, false, 'tssh that reconnected by itself is kept')
+    // The device rebooted: the error repeats and nothing else arrives.
+    alive = false
+    procs[0].emit('data', 'Last reconnect error: read auth packet failed: read udp 100.78.165.1:5000: i/o timeout')
+    await wait(250)
+    assert.equal(procs[0].killed, true, 'stuck tssh is replaced')
+    for (let i = 0; i < 40 && links.snapshot(s.id).status !== 'missing'; i++) await wait(100)
+    assert.equal(links.snapshot(s.id).status, 'missing', 'a fresh check finds the tmux session gone')
+    assert.match(links.snapshot(s.id).detail, /恢复会话/)
+    assert.equal(procs.length, 1, 'no new transport for a missing session')
+    assert(states.includes('reconnecting'))
+    // "connection refused": tsshd is certainly gone, no need to wait.
+    const t = ready(service, rows); alive = true
+    await links.connect(t.id)
+    procs.at(-1).emit('data', `\x1b]777;AIHUB_READY:${t.id}\x07`)
+    procs.at(-1).emit('data', 'Last reconnect error: read udp: connection refused')
+    await wait(20)
+    assert.equal(procs.at(-1).killed, true)
+    links.close()
+  } finally { P.TSSH_TAKEOVER_MS = saved }
+})
