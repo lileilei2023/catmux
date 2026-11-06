@@ -717,6 +717,20 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-web-browser-'))
   assert.equal(await page.locator('#host').inputValue(),'')
   assert((await page.locator('#backend-status').textContent()).includes('没有可用主机'))
   pass('empty host list is explained and creation disabled (regression from user screenshot)')
+  // One Catmux window: a second one hands over to the open window and closes
+  // itself (or explains, if the browser will not let it close).
+  {
+    const second = await context.newPage()
+    const closed = new Promise(r => second.once('close', () => r(true)))
+    await second.goto(server.origin)
+    const outcome = await Promise.race([closed, second.waitForSelector('body[data-ready="duplicate"]').then(() => 'note')])
+    if (outcome === 'note') {
+      assert(await second.getByText('Catmux 已在另一个窗口打开').isVisible())
+      await second.close()
+    }
+    assert.equal(await page.evaluate(() => document.body.dataset.ready), 'true', 'the first window keeps running')
+    pass(`single window: a second window hands over (${outcome === true ? 'closed itself' : 'explained'})`)
+  }
   assert.equal(failures.length,0,failures.join('\n'))
   const artifacts=path.join(__dirname, 'artifacts')
   fs.mkdirSync(artifacts,{recursive:true})

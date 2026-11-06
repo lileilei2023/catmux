@@ -742,6 +742,7 @@ function cacheSessions() {
   try { localStorage.setItem('sessions-cache', JSON.stringify([...sessions.values()].map(({ id, name, host, tool, cwd, project, group, owned, mode, status, launch, createdAt, tmux, companionOf }) => ({ id, name, host, tool, cwd, project, group, owned, mode, status, launch, createdAt, tmux, companionOf })))) } catch {}
 }
 async function init() {
+  if (window.AIHubSingle && !(await AIHubSingle.claim())) { AIHubSingle.duplicate(); return }
   if (!hub) throw new Error('未连接后端。请运行 catmux start 后打开 http://127.0.0.1:48731。')
   paintFromCache()
   info = await hub.info(); await refreshHosts()

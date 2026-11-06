@@ -69,8 +69,37 @@ stop() {
   wait_down $p && echo "已停止本机后端（各设备上的会话保留）" || { echo "进程 $p 未退出" >&2; return 1; }
 }
 pwa_app() { local a=( "$HOME/Applications/Chrome Apps.localized"/(Catmux|AI\ Hub)*.app(N) ); (( ${#a} )) && print -r -- "${a[1]}" }
+# One Catmux window: bring an open one (app window or tab) to the front instead
+# of starting another. Only when Chrome already runs; asks macOS for permission
+# to control Chrome once. Prints "yes" when a window was found.
+focus_existing() {
+  pgrep -xq "Google Chrome" || return 1
+  [[ $(osascript - "$URL" 2>/dev/null <<'APPLESCRIPT'
+on run argv
+  set target to item 1 of argv
+  tell application "Google Chrome"
+    repeat with w in windows
+      set i to 0
+      repeat with t in tabs of w
+        set i to i + 1
+        if (URL of t) starts with target then
+          set active tab index of w to i
+          if minimized of w then set minimized of w to false
+          set index of w to 1
+          activate
+          return "yes"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "no"
+end run
+APPLESCRIPT
+) == yes ]]
+}
 open_app() {
   start >/dev/null || { start; return 1; }
+  focus_existing && return 0
   # Prefer the installed Chrome web app (its own window and Dock icon).
   local pwa=$(pwa_app)
   if [[ -n $pwa ]]; then open "$pwa"

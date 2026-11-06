@@ -21,7 +21,7 @@ const FILES = new Map([
   ['/offline.html', ['web/offline.html', 'text/html; charset=utf-8']],
   ['/icons/icon-192.png', ['web/icon-192.png', 'image/png']],
   ['/icons/icon-512.png', ['web/icon-512.png', 'image/png']],
-  ...['web-bridge', 'remote-renderer', 'remote-workbench', 'remote-menu', 'remote-pathinput', 'remote-endtask'].map(n => [`/src/${n}.js`, [`src/${n}.js`, JS]]),
+  ...['web-bridge', 'remote-renderer', 'remote-workbench', 'remote-menu', 'remote-pathinput', 'remote-endtask', 'remote-single'].map(n => [`/src/${n}.js`, [`src/${n}.js`, JS]]),
   // Third-party front-end files are vendored (see web/vendor/LICENSES.md): no npm install needed.
   ['/vendor/xterm.js', ['web/vendor/xterm.js', JS]], ['/vendor/xterm.css', ['web/vendor/xterm.css', 'text/css; charset=utf-8']],
   ['/vendor/addon-fit.js', ['web/vendor/addon-fit.js', JS]], ['/vendor/addon-unicode11.js', ['web/vendor/addon-unicode11.js', JS]],
