@@ -78,6 +78,7 @@
       <div class="segmented" role="tablist">
         <button id="view-files" class="seg active" role="tab" aria-selected="true" data-view="files">文件</button>
         <button id="view-git" class="seg" role="tab" aria-selected="false" data-view="git">变更 <span id="git-count" class="count" hidden></span></button>
+        <button id="view-term" class="seg" role="tab" aria-selected="false" data-view="term" title="在会话所在目录打开一个终端（同一设备）">终端</button>
       </div>
       <span class="spacer"></span>
       <button id="wb-refresh" class="icon-btn" title="刷新" aria-label="刷新">↻</button>
@@ -103,6 +104,11 @@
           <button id="viewer-max" class="icon-btn" title="最大化查看区" aria-pressed="false" aria-label="最大化查看区">⤢</button>
         </div>
         <div id="doc-body" class="doc-body"><div class="doc-placeholder">点击文件预览 / 编辑，点击变更查看 diff。<br><small>编辑需显式进入；保存前校验远端版本并私有备份。</small></div></div>
+      </section>
+      <section id="side-term" class="side-term" aria-label="会话目录终端">
+        <div class="side-term-bar"><span id="side-term-status" class="side-term-status"></span><span class="spacer"></span><button id="side-term-reconnect" class="link" hidden>重新连接</button></div>
+        <p id="side-term-note" class="side-term-note"></p>
+        <div id="side-term-deck" class="side-term-deck"></div>
       </section>
     </div>
   </aside>

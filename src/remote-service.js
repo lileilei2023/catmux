@@ -22,7 +22,7 @@ def git(cwd, args): return run(['git','-C',cwd]+args)
 def repo(cwd):
     mount_guard(cwd)
     if not os.path.isdir(cwd): raise RuntimeError('远程目录不存在')
-    if git(cwd,['rev-parse','--is-inside-work-tree']) != 'true': raise RuntimeError('目标不是 git 工作区；不会 git init')
+    if run(['git','-C',cwd,'rev-parse','--is-inside-work-tree'],False) != 'true': raise RuntimeError('目标不是 git 仓库，不能创建独立 worktree（不会 git init）。取消勾选“创建独立 git worktree”即可直接在该目录运行')
     return git(cwd,['rev-parse','--show-toplevel'])
 def exact(name): return '='+name
 ${WORKSPACE}
@@ -46,8 +46,11 @@ try:
     elif op=='sessions': result=sessions()
     elif op=='create':
         cwd=arg['project']
-        if arg['tool']!='shell' or arg['worktree']: root=repo(cwd)
-        elif not os.path.isdir(cwd): raise RuntimeError('远程目录不存在')
+        # Git is only needed for an isolated worktree; agents can run in any directory.
+        if arg['worktree']: root=repo(cwd)
+        else:
+            mount_guard(cwd)
+            if not os.path.isdir(cwd): raise RuntimeError('远程目录不存在')
         if not shutil.which('tmux'): raise RuntimeError('登录 shell 找不到 tmux')
         if arg['tool']!='shell' and not shutil.which(arg['tool']): raise RuntimeError('登录 shell 找不到 '+arg['tool'])
         if arg.get('mode','direct')!='direct': raise RuntimeError('Claude Squad 模式已移除')
@@ -104,7 +107,7 @@ try:
         if subprocess.run(['tmux','has-session','-t',exact(arg['tmux'])],stdout=subprocess.PIPE,stderr=subprocess.PIPE).returncode: raise RuntimeError('远端 tmux 会话已不存在')
         run(['tmux','kill-session','-t',exact(arg['tmux'])])
         result=True
-    elif op in ('git','diff','files','read-file','save-file','tree','read-image'):
+    elif op in ('git','diff','files','read-file','save-file','tree','read-image','mkdir-in'):
         arg['cwd']=session_root(arg)
         if op=='git':
             with workspace_dir(arg['cwd']): result=git_changes(arg['cwd'])
@@ -112,6 +115,7 @@ try:
         elif op=='files': result=list_files(arg['cwd'],arg.get('path',''))
         elif op=='read-file': result=read_file(arg['cwd'],arg['path'])
         elif op=='read-image': result=read_image(arg['cwd'],arg['path'])
+        elif op=='mkdir-in': result=make_dir_in(arg['cwd'],arg['path'],arg['name'])
         elif op=='tree':
             with workspace_dir(arg['cwd']): result=tree(arg['cwd'],arg['paths'],arg['git'],bool(arg.get('deep')))
         else:
@@ -119,6 +123,7 @@ try:
             result=save_file(arg['cwd'],arg['path'],arg['sha256'],raw)
         if isinstance(result,dict) and 'root' not in result: result['root']=os.path.realpath(arg['cwd'])
     elif op=='list-dirs': result=list_dirs(arg['path'])
+    elif op=='mkdir': result=make_dir(arg['path'])
     elif op=='branches': result=list_branches(arg['project'])
     elif op=='task-status': result=task_status(arg)
     elif op=='task-clean': result=task_clean(arg)
@@ -401,12 +406,19 @@ class RemoteService {
     this.homes.set(host, r.home)
     return r
   }
+  // "New session" path field: create the typed project directory on that device.
+  async makeDir(host, value) {
+    await this.configured(host)
+    P.text(value, '远程路径', 4096)
+    if (!/^(\/|~\/)/.test(value)) throw new Error('路径需以 / 或 ~/ 开头')
+    return this.call(host, 'mkdir', { path: value })
+  }
   async expandHome(host, value) {
     if (typeof value !== 'string' || !/^~(\/|$)/.test(value)) return value
     if (!this.homes.has(host)) await this.listDirs(host, '~')
     return this.homes.get(host) + value.slice(1)
   }
-  async create(opts) {
+  async create(opts, internal = {}) {
     if (opts && typeof opts.project === 'string' && opts.host) opts = { ...opts, project: await this.expandHome(P.hostAlias(opts.host), opts.project.trim()) }
     // Worktree start branch / PR target: explicit choice, else the project's defaults.
     if (opts && opts.host && typeof opts.project === 'string' && opts.project.startsWith('/')) {
@@ -419,6 +431,7 @@ class RemoteService {
     if (opts && P.TOOLS.includes(opts.tool || 'codex') && opts.preset == null) { const d = this.settings.get(opts.tool || 'codex'); opts = { ...opts, preset: d.preset, extra: opts.extra ?? d.extra } }
     const s = P.newSession(opts)
     if (s.worktree) { s.base = opts.base || ''; s.prTarget = opts.prTarget || '' }
+    if (internal.companionOf) s.companionOf = internal.companionOf
     await this.configured(s.host)
     this.store.put(s)
     try {
@@ -458,6 +471,30 @@ class RemoteService {
     Object.assign(s, { tmux: found.name, owned: false, status: 'detached' }); this.store.put(s); return s
   }
   async inspect(id) { const s = this.get(id); return this.call(s.host, 'inspect', s) }
+  // Right-hand terminal: a plain shell in the session's directory on the same
+  // device, its own Catmux tmux session (survives disconnects like the agent).
+  companions(id) { return this.list().filter(c => c.companionOf === id) }
+  async companion(id) {
+    const s = this.get(id)
+    if (s.companionOf) throw new Error('附属终端没有自己的附属终端')
+    if (!s.cwd || ['failed', 'creating'].includes(s.status)) throw new Error('会话尚未就绪，不能打开终端')
+    for (const c of this.companions(id)) {
+      if (c.status !== 'stopped' && c.cwd === s.cwd) {
+        const info = await this.call(c.host, 'inspect', c)
+        if (info && !info.dead) return c
+        if (info) await this.call(c.host, 'stop', { ...c, allowImported: false }).catch(() => {})
+      }
+      this.store.remove(c.id)
+    }
+    return this.create({ host: s.host, project: s.cwd, tool: 'shell', transport: s.transport, name: `${s.name} · 终端`, worktree: false }, { companionOf: s.id })
+  }
+  // Ending or forgetting a session also ends its shell (it lives in that directory).
+  // Records go at once; the remote stop is best effort (the device may be offline).
+  endCompanions(id) {
+    const list = this.companions(id)
+    for (const c of list) this.store.remove(c.id)
+    return Promise.all(list.filter(c => c.status !== 'stopped').map(c => this.call(c.host, 'stop', { ...c, allowImported: false }).catch(() => {})))
+  }
   stoppable(s) {
     if (!s.tmux) return { ok: false, reason: '此记录没有 tmux 会话，无法停止' }
     if (s.status === 'stopped') return { ok: false, reason: '会话已停止' }
@@ -467,10 +504,11 @@ class RemoteService {
     const s = this.get(id), can = this.stoppable(s)
     if (!can.ok) throw new Error(can.reason)
     if (can.imported && !allowImported) throw new Error('导入的外部会话需要单独确认后才能停止')
-    await this.call(s.host, 'stop', { ...s, allowImported: can.imported && allowImported }); s.status = 'stopped'; this.store.put(s); return s
+    await this.call(s.host, 'stop', { ...s, allowImported: can.imported && allowImported }); s.status = 'stopped'; this.store.put(s)
+    await this.endCompanions(id); return s
   }
   rename(id, name, group) { const s = this.get(id); s.name = P.text(name, '名称', 100); s.group = group ? P.text(group, '分组', 100) : ''; this.store.put(s); return s }
-  forget(id) { this.get(id); this.store.remove(id) }
+  forget(id) { this.get(id); const ended = this.endCompanions(id); this.store.remove(id); return ended }
   // Workbench roots: the browser chooses a kind, never an absolute path.
   // cwd = the session's working directory (an Catmux worktree when isolated),
   // project = the original project the session was created from,
@@ -495,6 +533,7 @@ class RemoteService {
     return this.call(s.host, 'tree', { ...this.root(s, root), paths: paths.map(p => P.workspacePath(p, true)), git: !!withGit, deep: !!deep })
   }
   async readFile(id, relative, root) { const s = this.get(id); return this.call(s.host, 'read-file', { ...this.root(s, root), path: P.workspacePath(relative) }) }
+  async makeDirIn(id, relative, name, root) { const s = this.get(id); return this.call(s.host, 'mkdir-in', { ...this.root(s, root), path: P.workspacePath(relative, true), name: P.text(name, '文件夹名称', 255) }) }
   async readImage(id, relative, root) { const s = this.get(id); return this.call(s.host, 'read-image', { ...this.root(s, root), path: P.workspacePath(relative) }) }
   async diff(id, relative, staged = false, root) { const s = this.get(id); return this.call(s.host, 'diff', { ...this.root(s, root), path: P.workspacePath(relative), staged: !!staged }) }
   async saveFile(id, relative, content, sha256, root) {
@@ -535,6 +574,7 @@ class RemoteService {
   }
   async taskClean(id, target) {
     const s = this.get(id)
+    await this.endCompanions(id)
     const r = await this.call(s.host, 'task-clean', this.taskArgs(s, target))
     s.status = 'stopped'; s.cleaned = { at: Date.now(), ...r }; this.store.put(s); return r
   }
@@ -543,7 +583,9 @@ class RemoteService {
     P.text(title, 'PR 标题', 250)
     if (typeof body !== 'string' || body.length > 60000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(body)) throw new Error('PR 描述无效')
     const r = await this.call(s.host, 'task-pr', { ...this.taskArgs(s, target), title, body, allowDirty: !!allowDirty, stopAfter: !!stopAfter, pushOnly: !!pushOnly })
-    s.pr = { url: r.url, at: Date.now(), target: target || s.prTarget }; if (r.stopped) s.status = 'stopped'; this.store.put(s); return r
+    s.pr = { url: r.url, at: Date.now(), target: target || s.prTarget }; if (r.stopped) s.status = 'stopped'; this.store.put(s)
+    if (r.stopped) await this.endCompanions(id)
+    return r
   }
   // A pasted absolute path may only exist on this Mac. Report where it exists so
   // the UI never silently types a local-only path into the remote terminal.

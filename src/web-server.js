@@ -91,6 +91,8 @@ async function createWebServer(options = {}) {
     if (!matches(req.headers['x-aihub-csrf'], csrf)) throw error('请求校验失败，请刷新页面', 403)
     if (req.method === 'POST' && req.headers.origin !== origin) throw error('操作必须来自本机页面', 403)
   }
+  // A session's right-hand shell ends with it: drop its local transport first.
+  const dropCompanions = id => { for (const c of service.companions(id)) connections.disconnect(c.id) }
   const handlers = {
     info: () => ({ name: 'Catmux', version: VERSION, dataDir, tssh: !!service.bins.tssh, modelAccess: false, initialHost: '', initialProject: '' }),
     hosts: () => service.hosts(), sessions: () => service.list(),
@@ -108,12 +110,15 @@ async function createWebServer(options = {}) {
     'save-file': ({ id, path, content, sha256, root }) => service.saveFile(id, path, content, sha256, root),
     'check-path': ({ id, path }) => service.checkPath(id, path),
     'list-dirs': ({ host, path }) => service.listDirs(host, path),
+    mkdir: ({ host, path }) => service.makeDir(host, path),
+    'mkdir-in': ({ id, path, name, root }) => service.makeDirIn(id, path, name, root),
+    companion: ({ id }) => service.companion(id),
     branches: ({ host, project }) => service.branches(host, project),
     'project-settings': ({ host, project }) => service.projectSettings(host, project),
     'set-project-settings': ({ host, project, base, prTarget }) => service.setProjectSettings(host, project, { base, prTarget }),
     'task-status': ({ id, target }) => service.taskStatus(id, target),
-    'task-pr': ({ id, target, title, body, allowDirty, stopAfter, pushOnly }) => service.taskPr(id, { target, title, body, allowDirty, stopAfter, pushOnly }),
-    'task-clean': async payload => { consumeConfirmation(payload, 'clean'); connections.disconnect(payload.id); const r = await service.taskClean(payload.id, payload.target); connections.state(payload.id, 'stopped', '任务已清理：worktree 与本地分支已删除'); return r },
+    'task-pr': ({ id, target, title, body, allowDirty, stopAfter, pushOnly }) => { if (stopAfter) dropCompanions(id); return service.taskPr(id, { target, title, body, allowDirty, stopAfter, pushOnly }) },
+    'task-clean': async payload => { consumeConfirmation(payload, 'clean'); connections.disconnect(payload.id); dropCompanions(payload.id); const r = await service.taskClean(payload.id, payload.target); connections.state(payload.id, 'stopped', '任务已清理：worktree 与本地分支已删除'); return r },
     capture: ({ id, lines }) => service.capture(id, lines), 'copy-mode': ({ id, pageUp }) => service.copyMode(id, pageUp),
     'launch-settings': () => service.settings.all(),
     'set-launch-default': ({ tool, preset, extra }) => service.settings.set(tool, preset, extra),
@@ -129,14 +134,14 @@ async function createWebServer(options = {}) {
       for (const [key, value] of confirmations) if (value.expires < Date.now()) confirmations.delete(key)
       if (confirmations.size > 100) throw error('待确认操作过多')
       confirmations.set(ticket, { id, operation, expires: Date.now() + 60000 })
-      return { ticket, name: s.name, operation, tmux: s.tmux, host: s.host, imported: !!can.imported, squadInstance: !!can.squadInstance }
+      return { ticket, name: s.name, operation, tmux: s.tmux, host: s.host, imported: !!can.imported, squadInstance: !!can.squadInstance, companion: service.companions(id).some(c => c.status !== 'stopped') }
     },
     stop: async payload => {
-      consumeConfirmation(payload, 'stop'); connections.disconnect(payload.id)
+      consumeConfirmation(payload, 'stop'); connections.disconnect(payload.id); dropCompanions(payload.id)
       // The single-use ticket above is the user's explicit confirmation (it names imported sessions).
       const result = await service.stop(payload.id, { allowImported: true }); connections.state(payload.id, 'stopped'); return result
     },
-    forget: payload => { consumeConfirmation(payload, 'forget'); connections.disconnect(payload.id); service.forget(payload.id); return true }
+    forget: payload => { consumeConfirmation(payload, 'forget'); connections.disconnect(payload.id); dropCompanions(payload.id); service.forget(payload.id); return true }
   }
   function consumeConfirmation({ id, ticket }, operation) {
     const value = confirmations.get(ticket)

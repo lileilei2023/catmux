@@ -7,7 +7,7 @@
   const $ = id => document.getElementById(id)
   function node(tag, content, className) { const el = document.createElement(tag); if (content != null) el.textContent = content; if (className) el.className = className; return el }
   const NARROW = 1000
-  let hub, toast, getSession, insertText, onLayout = () => {}
+  let hub, toast, getSession, insertText, onLayout = () => {}, onTerminal = () => {}, offTerminal = () => {}
 
   // ---------- layout ----------
   const defaults = { left: true, right: true, leftW: 280, rightW: 460, explorerH: 42, wide: false, viewerMax: false }
@@ -80,6 +80,7 @@
     $('viewer-max').onclick = () => { layout.viewerMax = !layout.viewerMax; saveLayout(); applyLayout() }
     $('view-files').onclick = () => setView('files')
     $('view-git').onclick = () => setView('git')
+    $('view-term').onclick = () => setView('term')
     $('wb-refresh').onclick = () => refresh()
     if (narrow() && layout.left && layout.right) layout.right = false
     let wasNarrow = narrow()
@@ -257,7 +258,7 @@
     readTreeCache(w)
     const data = read(DOCS + w.id)
     if (data?.v === 1) {
-      w.view = data.view === 'git' ? 'git' : 'files'; w.active = data.active
+      w.view = ['git', 'term'].includes(data.view) ? data.view : 'files'; w.active = data.active
       for (const d of data.docs || []) {
         const doc = { ...d, mode: 'preview', stale: true }
         if (d.kind === 'file' && typeof d.original === 'string') Object.assign(doc, { content: d.original, dirty: false })
@@ -375,7 +376,7 @@
     if (info) head.append(node('small', `${info.dirs} 个目录${info.complete ? '' : ' · 部分预加载'}`, 'tree-root-info'))
     head.title = rootPath + ' · 点击全部折叠'
     head.onclick = collapseAll
-    head.oncontextmenu = e => AIHubMenu.open(e, [{ label: '刷新整个结构', action: () => sync(w.id, { force: true }) }, { label: '全部折叠', action: collapseAll }, '-', ...pathItems(rootPath, '')])
+    head.oncontextmenu = e => AIHubMenu.open(e, [{ label: '新建文件夹…', action: () => newFolder('') }, { label: '刷新整个结构', action: () => sync(w.id, { force: true }) }, { label: '全部折叠', action: collapseAll }, '-', ...pathItems(rootPath, '')])
     view.append(head)
     walk('', 1)
   }
@@ -384,6 +385,7 @@
     const parent = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''
     if (entry.directory) return [
       { label: w.expanded.has(entry.path) ? '折叠' : '展开', action: () => toggleDir(entry.path) },
+      { label: '新建文件夹…', action: () => newFolder(entry.path) },
       { label: '刷新此目录', action: () => loadDir(entry.path) },
       { label: '全部折叠', action: collapseAll },
       '-', ...pathItems(abs, entry.path)
@@ -396,6 +398,16 @@
       '-', ...pathItems(abs, entry.path),
       '-', { label: '刷新所在目录', action: () => loadDir(parent) }
     ]
+  }
+  // One new folder inside a browsed directory, on the session's device.
+  async function newFolder(dir) {
+    const w = space(); if (!w) return
+    const name = window.prompt(`在 ${absolute(rootPathOf(w), dir)} 下新建文件夹：`, '')
+    if (name == null || !name.trim()) return
+    try {
+      const r = await hub.makeDirIn(w.id, dir, name.trim(), w.rootKey)
+      w.expanded.add(dir); await loadDir(dir); toast(`已创建 ${r.path}`)
+    } catch (e) { toast(e.message) }
   }
   function collapseAll() { const w = space(); w.expanded = new Set(['']); writeTreeCache(w); renderTree() }
   function row(depth, text, className) { const el = node('div', text, className); el.style.paddingLeft = (8 + depth * 14 + 16) + 'px'; return el }
@@ -795,7 +807,12 @@
     for (const b of document.querySelectorAll('.seg')) { const on = b.dataset.view === view; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)) }
     $('files-view').hidden = view !== 'files'
     $('git-view').hidden = view !== 'git'
+    // "终端" tab: the renderer shows a shell for this session in #side-term.
+    $('wb-body').classList.toggle('term-view', view === 'term')
+    const want = view === 'term' && usable(session()) ? current : null
+    if (want !== termFor) { termFor = want; if (want) onTerminal(session()); else offTerminal() }
   }
+  let termFor = null
   function renderLists() { renderRoot(); renderTree(); renderGit(); renderTabs() }
   function renderAll() { renderView(); renderLists(); renderDoc() }
 
@@ -803,10 +820,10 @@
   // short SSH command every 20 s re-checks visible directories + Git status.
   setInterval(() => {
     const w = space(), s = session()
-    if (!w || !usable(s) || !layout.right || document.visibilityState !== 'visible' || w.syncing) return
+    if (!w || !usable(s) || !layout.right || w.view === 'term' || document.visibilityState !== 'visible' || w.syncing) return
     if (Date.now() - w.syncedAt > 20000) sync()
   }, 5000)
-  window.addEventListener('focus', () => { const w = space(); if (w && layout.right && usable(session()) && Date.now() - w.syncedAt > 5000) sync() })
+  window.addEventListener('focus', () => { const w = space(); if (w && layout.right && w.view !== 'term' && usable(session()) && Date.now() - w.syncedAt > 5000) sync() })
 
   function initWorkbench() {
     $('wb-root').onchange = e => setRoot(e.target.value)
@@ -816,6 +833,7 @@
       const w = space(); if (!w) return
       AIHubMenu.open(e, [
         { label: '刷新', hint: '↻', action: () => sync(w.id, { force: true }) },
+        { label: '新建文件夹…', action: () => newFolder('') },
         { label: '全部折叠', action: collapseAll },
         '-',
         ...rootsOf(session()).filter(r => r.key !== w.rootKey).map(r => ({ label: '切换到：' + r.label, action: () => setRoot(r.key) })),
@@ -825,7 +843,7 @@
   }
 
   window.AIHubWorkbench = {
-    init(options) { ({ hub, toast, getSession, insertText } = options); onLayout = options.onLayout || onLayout; initLayout(); initWorkbench() },
+    init(options) { ({ hub, toast, getSession, insertText } = options); onLayout = options.onLayout || onLayout; onTerminal = options.onTerminal || onTerminal; offTerminal = options.offTerminal || offTerminal; initLayout(); initWorkbench() },
     setSession, usableChanged, forget, toggleFocus, dirtyCount, layout, openFile, openDiff, openImage, sync,
     // Read-only text (e.g. captured terminal history); searchable with ⌘F.
     openText(title, content, note) {

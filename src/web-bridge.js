@@ -81,7 +81,7 @@
       : !result.imported ? `停止远端 ${result.name}？\n这将结束 ${where} 及其中的 agent。项目、worktree 与分支保留。`
       : `结束 ${where}？\n\n这个会话不是 Catmux 创建的（导入），结束后其中运行的 agent 会被终止。项目文件、worktree 与分支不删除。` +
         (result.squadInstance ? '\n\n它是 Claude Squad 的实例：cs 的记录仍保留，cs 里可能显示为失效，可在 cs 中用 D 清理。' : '')
-    if (!window.confirm(message)) return false
+    if (!window.confirm(message + (result.companion ? '\n\n右侧面板里为它打开的终端会一并结束。' : ''))) return false
     return invoke(operation, { id, ticket: result.ticket })
   }
   window.remoteHub = {
@@ -106,7 +106,8 @@
     readFile: (id, path, root) => invoke('read-file', { id, path, root }), readImage: (id, path, root) => invoke('read-image', { id, path, root }),
     diff: (id, path, staged, root) => invoke('diff', { id, path, staged, root }),
     saveFile: (id, path, content, sha256, root) => invoke('save-file', { id, path, content, sha256, root }),
-    listDirs: (host, path) => invoke('list-dirs', { host, path }),
+    listDirs: (host, path) => invoke('list-dirs', { host, path }), makeDir: (host, path) => invoke('mkdir', { host, path }),
+    makeDirIn: (id, path, name, root) => invoke('mkdir-in', { id, path, name, root }), companion: id => invoke('companion', { id }),
     branches: (host, project) => invoke('branches', { host, project }),
     projectSettings: (host, project) => invoke('project-settings', { host, project }),
     setProjectSettings: (host, project, base, prTarget) => invoke('set-project-settings', { host, project, base, prTarget }),

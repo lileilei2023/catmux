@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/lileilei2023/catmux/main/install.sh
 
 - **左**：按设备分组的会话，`＋` 在任意设备上新建；右键连接、重命名、复制附着命令。
 - **中**：真实的远端 tmux 终端（xterm.js），字体、专注模式、`⌘B` / `⌘⌥B` 随手收起两侧。
-- **右**：远端项目的文件 / Git 变更，结构一次加载并缓存，刷新页面瞬间出现。
+- **右**：远端项目的文件 / Git 变更 / **终端**。文件结构一次加载并缓存，刷新页面瞬间出现；“终端”页签在会话所在目录（任务的 worktree）开一个 shell，跑测试、看日志不用另开窗口，同样断线不丢；右键“新建文件夹”。
 
 ### 每个任务一个独立 worktree，收尾一键开 PR
 
@@ -63,11 +63,12 @@ curl -fsSL https://raw.githubusercontent.com/lileilei2023/catmux/main/install.sh
 <td width="50%"><img src="docs/media/end-task.png" alt="结束任务并开 PR"></td>
 </tr>
 <tr>
-<td>新建任务：<code>~/</code> 路径补全、选起点分支（每个项目可设默认，比如 <code>develop</code>）、选权限模式（默认 / 自动编辑 / 完全权限）并可透传任意参数。</td>
+<td>新建任务：<code>~/</code> 路径补全（目录还不存在就一键在那台设备上创建）、选起点分支（每个项目可设默认，比如 <code>develop</code>）、选权限模式（默认 / 自动编辑 / 完全权限）并可透传任意参数。</td>
 <td>结束任务：先告诉你还有几个提交没 push、有没有未提交改动、PR 是否合并；推送并用 <code>gh</code> 开 PR，或在 PR 合并后清理 worktree 和分支。</td>
 </tr>
 </table>
 
+- 不是 Git 仓库也能用：自动取消 worktree，直接在该目录运行 Codex / Claude。
 - 清理只在**确认已合并**时才允许：GitHub 显示 PR 为 MERGED（兼容 squash），或 git 证明分支内容已进入目标分支（适用于 Gitee / GitLab / 本地合并）。
 - 从不 `--force`，从不自动提交；有未提交改动会先列出来让你决定。
 - 主仓库在外置盘而盘没挂上时，给出“磁盘未挂载”的明确提示，而不是一串 git 报错。

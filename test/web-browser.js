@@ -30,13 +30,14 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-web-browser-'))
   const tree = { '': [{ name: 'src', path: 'src', directory: true, size: 96 }, { name: 'README.md', path: 'README.md', directory: false, size: 16 }, { name: 'shot.png', path: 'shot.png', directory: false, size: fixturePng.length }],
     src: [{ name: 'app.js', path: 'src/app.js', directory: false, size: 38 }] }
   const contents = { 'README.md': '# Fixture\nhello\n', 'src/app.js': 'const answer = 42\nconsole.log(answer)\n' }
-  const saves = [], fileOps = []
+  const saves = [], fileOps = [], mkdirs = [], mkdirIns = [], madeDirs = [], stops = []
+  let lastCreate = null
   const appPatch = 'diff --git a/src/app.js b/src/app.js\nindex 1..2 100644\n--- a/src/app.js\n+++ b/src/app.js\n@@ -1,2 +1,2 @@\n-const answer = 41\n+const answer = 42\n console.log(answer)\n'
   service.hosts = async () => [{ alias: 'local', hostname: 'fixture-air', user: 'test', port: '', local: true }, { alias: 'macmini', hostname: 'mac-mini.fixture.ts.net', user: 'test', port: '22' }]
   let redraws = 0
   service.call = async (_host, op, arg, bytes) => {
     if (op === 'create') {
-      creates++
+      creates++; lastCreate = arg
       if (failNextCreate) { failNextCreate = false; throw new Error('no such window: =' + arg.tmux) }
       return { cwd: arg.project, tmux: arg.tmux }
     }
@@ -59,7 +60,7 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-web-browser-'))
     if (op === 'list-dirs') {
       const listings = { '~': ['workspace', 'Documents', '.config-like'], '~/workspace': ['my-app', 'my-api', 'notes'], '/test': ['web-fixture'] }
       const home = '/Users/fixture', dir = arg.path.startsWith('~') ? home + arg.path.slice(1) : arg.path
-      const names = listings[arg.path.replace(/\/$/, '')]
+      const key = arg.path.replace(/\/$/, ''), names = listings[key] && [...listings[key], ...(key === '~/workspace' ? madeDirs : [])]
       return { dir, home, exists: !!names || arg.path.startsWith('/test/'), git: /my-app|web-fixture/.test(arg.path), truncated: false,
         entries: (names || []).map(name => ({ name, git: /my-app|web-fixture/.test(name), hidden: name.startsWith('.') })) }
     }
@@ -81,6 +82,9 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-web-browser-'))
     if (op === 'task-clean') { task.cleans++; return { removedWorktree: true, deletedBranch: true, worktree: '/test/wt/' + arg.id, branch: 'aihub/' + arg.id } }
     if (op === 'capture') return { text: 'AI said: hello world\nsecond line of output', truncated: false, alternate: false }
     if (op === 'copy-mode') return true
+    if (op === 'mkdir') { mkdirs.push(arg.path); madeDirs.push(arg.path.split('/').pop()); return { path: '/Users/fixture/' + arg.path.slice(2) } }
+    if (op === 'mkdir-in') { mkdirIns.push(arg); return { path: (arg.path ? arg.path + '/' : '') + arg.name, root: arg.cwd } }
+    if (op === 'stop') { stops.push(arg.tmux); return true }
     if (op === 'path-exists') return { exists: arg.path.startsWith('/test/'), file: true }
     if (op === 'read-file') return { path: arg.path, content: contents[arg.path], sha256: sha(contents[arg.path]), size: Buffer.byteLength(contents[arg.path]) }
     if (op === 'save-file') {
@@ -141,6 +145,8 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-web-browser-'))
   await page.locator('#project-suggest .suggest-item', { hasText: '~/workspace/' }).waitFor()
   await page.locator('#create-project').fill('~/work')
   await page.keyboard.press('Tab') // immediately: must use candidates for "~/work", not the stale list
+  // Completion reads the remote listing first, so the result lands asynchronously.
+  await page.waitForFunction(() => document.getElementById('create-project').value !== '~/work')
   assert.equal(await page.locator('#create-project').inputValue(), '~/workspace/')
   await page.locator('#project-suggest .suggest-item', { hasText: 'my-app' }).waitFor()
   assert(await page.locator('#project-suggest .suggest-item', { hasText: 'my-app' }).locator('.suggest-git').count(), 'git repos are marked')
@@ -646,6 +652,64 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-web-browser-'))
   pass('end task: blocked reasons listed; PR needs consent for uncommitted changes and targets develop; push-only for non-GitHub; clean once merged')
   await page.locator('#disconnect').click()
   await page.waitForFunction(() => document.getElementById('connection').textContent === '未连接')
+
+  // Plain (non-Git) project: the worktree option unticks itself and the agent
+  // still starts there. A missing directory is created on that device in one click.
+  await page.locator('#host').selectOption('macmini')
+  await page.locator('#new-session').click()
+  await page.locator('#create-tool').selectOption('codex')
+  await page.locator('#create-worktree').check()
+  await page.locator('#create-project').fill('~/workspace/notes')
+  await page.waitForFunction(() => document.getElementById('project-hint').textContent.includes('非 Git 目录'))
+  assert.equal(await page.locator('#create-worktree').isChecked(), false, 'non-Git directory: no worktree')
+  assert((await page.locator('#worktree-hint').textContent()).includes('不是 Git 仓库'))
+  await page.locator('#create-project').fill('~/workspace/my-app')
+  await page.waitForFunction(() => document.getElementById('project-hint').textContent.includes('Git 仓库，可创建'))
+  assert.equal(await page.locator('#create-worktree').isChecked(), true, 'ticked again for a Git repository')
+  await page.locator('#create-project').fill('~/workspace/brand-new')
+  await page.locator('#project-hint .path-create').waitFor()
+  await page.locator('#create-dialog').screenshot({ path: path.join(__dirname, 'artifacts/ai-hub-create-mkdir.png') })
+  await page.locator('#project-hint .path-create').click()
+  await page.waitForFunction(() => document.getElementById('project-hint').textContent.includes('非 Git 目录'))
+  assert.deepEqual(mkdirs, ['~/workspace/brand-new'])
+  assert.equal(await page.locator('#create-worktree').isChecked(), false)
+  await page.locator('#create-name').fill('普通目录 agent')
+  await page.locator('#create-submit').click()
+  await page.waitForFunction(() => document.getElementById('connection').textContent === '已连接')
+  assert.equal(lastCreate.tool, 'codex'); assert.equal(lastCreate.worktree, false); assert.equal(lastCreate.project, '/Users/fixture/workspace/brand-new')
+  pass('new session: non-Git directory runs without a worktree; a missing directory is created on the device first')
+
+  // Right-hand "终端" tab: a shell in the session's directory, same device, its own tmux.
+  if (!(await page.evaluate(() => AIHubWorkbench.layout.right))) await page.locator('#expand-right').click()
+  const parent = await page.evaluate(() => localStorage.getItem('active-session'))
+  await page.locator('#view-term').click()
+  await page.waitForFunction(() => [...document.querySelectorAll('#side-term-deck .remote-terminal.active')].length === 1)
+  await page.waitForFunction(id => [...terminals.entries()].some(([key, { term, el }]) => key !== id && el.closest('#side-term-deck') && Array.from({ length: term.buffer.active.length }, (_, i) => term.buffer.active.getLine(i)?.translateToString()).join('\n').includes('WEB_TERMINAL_FIXTURE')), parent)
+  assert.equal(lastCreate.tool, 'shell'); assert.equal(lastCreate.project, '/Users/fixture/workspace/brand-new'); assert.equal(lastCreate.companionOf, parent)
+  await page.waitForFunction(() => document.getElementById('side-term-status').textContent.includes('已连接'))
+  assert.equal(await page.locator('#session-list').getByText('普通目录 agent · 终端').count(), 0, 'the shell is not listed as a separate session')
+  assert.equal(await page.evaluate(() => localStorage.getItem('active-session')), parent, 'the agent stays the active session')
+  const companionCreates = creates
+  await page.locator('#view-files').click(); await page.locator('#view-term').click()
+  assert.equal(creates, companionCreates, 'switching tabs reuses the same shell')
+  await page.screenshot({ path: path.join(__dirname, 'artifacts/ai-hub-side-terminal.png') })
+  pass('right panel terminal: shell in the session directory on the same device, not listed separately, reused')
+
+  // New folder from the file tree's context menu.
+  await page.locator('#view-files').click()
+  promptAnswer = 'docs'
+  await page.locator('#files-view .tree-root').click({ button: 'right' })
+  await page.locator('.ctx-menu .ctx-item', { hasText: '新建文件夹' }).click()
+  await page.waitForFunction(() => document.getElementById('toast').textContent.includes('已创建 docs'))
+  assert.equal(mkdirIns.at(-1).name, 'docs'); assert.equal(mkdirIns.at(-1).path, ''); assert.equal(mkdirIns.at(-1).cwd, '/Users/fixture/workspace/brand-new')
+  pass('file tree: new folder in the browsed directory via the context menu')
+
+  // Stopping the session ends its shell too.
+  await page.locator('#stop').click()
+  await page.waitForFunction(() => document.getElementById('connection').textContent === '已停止')
+  assert.equal(stops.length, 2, 'agent and its shell')
+  await page.waitForFunction(() => ![...terminals.values()].some(({ el }) => el.closest('#side-term-deck')))
+  pass('stopping a session also ends its right-hand shell')
 
   service.hosts = async () => []
   await page.locator('#refresh-hosts').click()

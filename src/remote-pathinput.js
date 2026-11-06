@@ -14,7 +14,7 @@
   const request = dir => dir === '/' ? '/' : dir.replace(/\/+$/, '') || '/'
   const join = (dir, name) => (dir.endsWith('/') ? dir : dir + '/') + name
 
-  function attach({ input, list, hint, hub, host, recent }) {
+  function attach({ input, list, hint, hub, host, recent, onState = () => {} }) {
     let items = [], index = -1, seq = 0, timer = null, open = false, itemsFor = null
     function listing(dir, fresh = false) {
       const key = host() + '\n' + request(dir), hit = cache.get(key)
@@ -24,6 +24,21 @@
       return promise
     }
     function setHint(text, kind = '') { hint.textContent = text; hint.className = 'path-hint' + (kind ? ' ' + kind : '') }
+    // A path that does not exist yet can be created on that device in one click.
+    function offerCreate(target) {
+      const button = node('button', `在 ${host()} 上新建此目录`, 'link path-create'); button.type = 'button'
+      button.addEventListener('mousedown', e => e.preventDefault())
+      button.onclick = async () => {
+        const where = host(); button.disabled = true; button.textContent = '正在创建…'
+        try {
+          const r = await hub.makeDir(where, target)
+          for (const key of [...cache.keys()]) if (key.startsWith(where + '\n')) cache.delete(key)
+          if (host() === where && input.value.replace(/\/+$/, '') === target.replace(/\/+$/, '')) { input.dispatchEvent(new Event('change')); await update(false) }
+          window.AIHubToast?.(`已在 ${where} 上创建 ${r.path}`)
+        } catch (e) { setHint(e.message, 'error') }
+      }
+      hint.append(' ', button)
+    }
     function close() { open = false; list.hidden = true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant') }
     function show(next, title) {
       itemsFor = input.value; items = next; index = next.length && input.value && !input.value.endsWith('/') ? 0 : -1
@@ -76,12 +91,17 @@
       if (showList) show([...starts, ...contains].slice(0, 80).map(e => ({ value: part.dir + e.name + '/', label: e.name, git: e.git })), null)
       const exact = part.prefix && data.entries.find(e => e.name === part.prefix)
       const where = `${host()}:${exact ? join(data.dir, exact.name) : data.dir}`
-      if (!data.exists) setHint(`${host()} 上不存在 ${data.dir}`, 'error')
+      const target = value.replace(/\/+$/, '')
+      if (!data.exists) { setHint(`${host()} 上不存在 ${data.dir}`, 'error'); onState({ path: value, exists: false }); if (target !== '~') offerCreate(target) }
       else if (exact || !part.prefix) {
         const git = exact ? exact.git : data.git
-        setHint(`${where} · ${git ? 'Git 仓库，可创建 worktree' : '非 Git 目录（Codex/Claude 需要 Git 仓库；远程 Shell 可用）'}`, git ? 'ok' : 'warn')
-      } else setHint(starts.length + contains.length ? `${starts.length + contains.length} 个候选 · ↑↓ 选择，Tab 补全` : `${data.dir} 下没有匹配的目录`, starts.length + contains.length ? '' : 'warn')
-      if (data.truncated && showList) setHint(hint.textContent + ' · 仅列出前 1000 个目录')
+        setHint(`${where} · ${git ? 'Git 仓库，可创建独立 worktree' : '非 Git 目录：可直接运行 Codex / Claude / Shell，不创建 worktree'}`, git ? 'ok' : 'warn')
+        onState({ path: value, exists: true, git })
+      } else {
+        setHint(starts.length + contains.length ? `${starts.length + contains.length} 个候选 · ↑↓ 选择，Tab 补全 ·` : `${data.dir} 下没有 ${part.prefix}`, starts.length + contains.length ? '' : 'warn')
+        onState({ path: value, exists: false }); offerCreate(target)
+      }
+      if (data.truncated && showList) hint.prepend('仅列出前 1000 个目录 · ')
     }
     input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list')
     input.setAttribute('aria-controls', list.id); input.setAttribute('aria-expanded', 'false'); input.autocomplete = 'off'; input.spellcheck = false

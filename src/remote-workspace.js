@@ -104,6 +104,28 @@ def list_dirs(value):
         entries.append(dict(name=name,git=os.path.exists(os.path.join(full,'.git')),hidden=name.startswith('.')))
     entries.sort(key=lambda e:(e['hidden'],e['name'].lower()))
     return dict(dir=absolute,home=home,exists=True,git=os.path.exists(os.path.join(real,'.git')),entries=entries,truncated=truncated)
+def new_dir_name(name):
+    if not isinstance(name,str) or not name or len(name)>255 or name in ('.','..') or '/' in name or re.search(r'[\x00-\x1f\x7f]',name): raise RuntimeError('文件夹名称无效')
+    if protected_name(name): raise RuntimeError('不能创建凭据 / 模型配置类名称的目录')
+def make_dir(value):
+    # "New session" path field: create the project directory the user typed,
+    # only inside the login user's home and never in credential / model homes.
+    info=list_dirs(value)
+    if info['exists']: raise RuntimeError('目录已存在')
+    absolute,home=info['dir'],info['home']
+    rel=os.path.relpath(os.path.realpath(absolute),home)
+    if rel=='.' or rel.startswith('..'): raise RuntimeError('只能在远端用户主目录（~）下新建目录')
+    if os.path.lexists(absolute): raise RuntimeError('已存在同名文件')
+    for part in rel.split('/'): new_dir_name(part)
+    os.makedirs(absolute,0o755)
+    return dict(path=absolute)
+def make_dir_in(cwd,relative,name):
+    # Right-hand file tree: one new folder inside a browsed directory.
+    new_dir_name(name)
+    with workspace_dir(cwd,relative) as fd:
+        try: os.mkdir(name,0o755,dir_fd=fd)
+        except FileExistsError: raise RuntimeError('已存在同名文件或目录')
+    return dict(path=(relative+'/' if relative else '')+name)
 def session_root(arg):
     # The browser only picks a root *kind*; absolute roots come from the stored
     # session or from the session's own tmux pane, resolved here on the server.

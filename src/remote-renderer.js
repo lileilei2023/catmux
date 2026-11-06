@@ -41,7 +41,7 @@ const unread = new Set(), unreadBytes = new Map()
 let listFrame = 0
 function scheduleList() { cancelAnimationFrame(listFrame); listFrame = requestAnimationFrame(renderList) }
 function noteOutput(id, data) {
-  if (id === active || unread.has(id) || !sessions.has(id)) return
+  if (id === active || unread.has(id) || !sessions.has(id) || sessions.get(id).companionOf) return
   // Ignore tmux status-line ticks: count visible text only, over a threshold.
   const text = data.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b./g, '').replace(/\s+/g, '')
   const total = (unreadBytes.get(id) || 0) + text.length
@@ -62,6 +62,7 @@ function renderList() {
   const filter = $('filter').value.toLowerCase()
   const devices = new Map()
   for (const s of sessions.values()) {
+    if (s.companionOf) continue // right-hand terminals belong to their session
     if (filter && ![s.name,s.host,deviceLabel(s.host),s.cwd,s.tool,s.group].join(' ').toLowerCase().includes(filter)) continue
     if (!devices.has(s.host)) devices.set(s.host, [])
     devices.get(s.host).push(s)
@@ -153,9 +154,9 @@ function updateToolbar() {
   // The cwd is ellipsized from the left (rtl); LRM marks keep "/" where it belongs.
   $('remote-cwd').textContent = s?.cwd ? `\u200e${s.cwd}\u200e` : '本机仅负责显示与管理'; $('remote-cwd').title = s?.cwd || ''
 }
-function ensureTerminal(id) {
+function ensureTerminal(id, parent = $('terminal-deck')) {
   if (terminals.has(id)) return terminals.get(id)
-  const el = node('div', null, 'remote-terminal'); el.dataset.id = id; $('terminal-deck').append(el)
+  const el = node('div', null, 'remote-terminal'); el.dataset.id = id; parent.append(el)
   const term = new Terminal({ cursorBlink: true, fontSize: terminalFontSize, fontFamily: TERMINAL_FONT,
     fontWeight: 'normal', fontWeightBold: 'bold', letterSpacing: 0, lineHeight: 1.2, scrollback: 50000,
     // When the CLI / tmux grabs the mouse, ⌥-drag still makes a normal text selection (⌘C copies it).
@@ -169,7 +170,7 @@ function ensureTerminal(id) {
   // Ignored during history replay and for terminals not on screen.
   term.parser.registerOscHandler(52, data => {
     const i = data.indexOf(';'), payload = i < 0 ? '' : data.slice(i + 1)
-    if (!payload || payload === '?' || item.replaying || id !== active || document.visibilityState !== 'visible') return true
+    if (!payload || payload === '?' || item.replaying || (id !== active && id !== sideTerm) || document.visibilityState !== 'visible') return true
     try {
       const bytes = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
       if (bytes.length > 4 * 1024 * 1024) return true
@@ -241,8 +242,57 @@ function feed(item, chunk) {
 let fitFrame = 0
 function fitActive() {
   cancelAnimationFrame(fitFrame)
-  fitFrame = requestAnimationFrame(() => { const t = active && terminals.get(active); if (t && !$('terminal-deck').hidden) { try { t.fit.fit() } catch {} } })
+  fitFrame = requestAnimationFrame(() => {
+    const t = active && terminals.get(active); if (t && !$('terminal-deck').hidden) { try { t.fit.fit() } catch {} }
+    const side = sideTerm && terminals.get(sideTerm); if (side && side.el.offsetParent) { try { side.fit.fit() } catch {} }
+  })
 }
+// ---- right-hand "终端" tab: a shell in the selected session's directory ----
+// Its own Catmux tmux session on the same device (created on first open, kept
+// across disconnects, ended together with the session).
+let sideTerm = null, sideSeq = 0
+async function restoreTerminal(id, terminal) {
+  terminal.el.classList.add('restoring')
+  const snapshot = await action(() => hub.snapshot(id))
+  if (snapshot) {
+    flushSync(terminal); terminal.held = ''
+    terminal.term.reset(); terminal.replaying = true
+    await new Promise(resolve => terminal.term.write(snapshot.data, resolve))
+    terminal.replaying = false; terminal.restored = true
+    states.set(id, snapshot.status)
+    if (snapshot.status === 'connected' && snapshot.data && hub.redraw) { if (await hub.redraw(id).catch(() => false)) await new Promise(r => setTimeout(r, 160)) }
+  }
+  terminal.el.classList.remove('restoring')
+}
+function sideNote(text) { $('side-term-note').textContent = text; $('side-term-note').hidden = !text }
+function updateSideBar() {
+  const c = sideTerm && sessions.get(sideTerm), status = c ? states.get(c.id) || 'detached' : null
+  $('side-term-status').textContent = c ? `\u200e${statusNames[status] || status} · ${c.host === LOCAL ? '本机' : c.host}:${c.cwd}\u200e` : ''
+  $('side-term-status').title = c?.cwd || ''
+  $('side-term-reconnect').hidden = !c || ['connected', 'connecting', 'attached', 'reconnecting'].includes(status)
+}
+async function openSideTerminal(s) {
+  const my = ++sideSeq, deck = $('side-term-deck')
+  sideTerm = null; updateSideBar()
+  for (const el of deck.children) el.classList.remove('active')
+  if (!s || s.companionOf) { sideNote('选择左侧会话后，在这里打开它所在目录的终端。'); return }
+  if (s.status === 'stopped') { sideNote('会话已停止，不能打开它目录里的终端。'); return }
+  sideNote(`正在 ${deviceLabel(s.host)} 上打开 ${s.cwd} 的终端…`)
+  let c
+  try { c = await hub.companion(s.id) } catch (e) { if (my === sideSeq) sideNote('打开终端失败：' + e.message); return }
+  if (my !== sideSeq) return
+  sessions.set(c.id, c)
+  const t = ensureTerminal(c.id, deck)
+  for (const el of deck.children) el.classList.toggle('active', el === t.el)
+  sideNote(''); sideTerm = c.id; updateSideBar()
+  try { t.fit.fit() } catch {}
+  if (!t.restored) await restoreTerminal(c.id, t)
+  if (my !== sideSeq) return
+  if (states.get(c.id) !== 'connected') await action(() => hub.connect(c.id))
+  updateSideBar(); fitActive(); t.term.focus()
+}
+function closeSideTerminal() { sideSeq++; sideTerm = null; updateSideBar() }
+$('side-term-reconnect').onclick = () => action(async () => { if (sideTerm) { await hub.connect(sideTerm); terminals.get(sideTerm)?.term.focus() } })
 function updateFontControls() {
   $('terminal-font-size').textContent = `${terminalFontSize} px`
   $('terminal-font-smaller').disabled = terminalFontSize <= 11
@@ -268,7 +318,7 @@ async function select(id) {
   // size first, so history is laid out once and the PTY is not resized again.
   $('welcome').hidden = true; $('terminal-deck').hidden = false
   const terminal = ensureTerminal(id)
-  for (const [key,t] of terminals) t.el.classList.toggle('active', key === id)
+  for (const [key,t] of terminals) if (t.el.parentNode === $('terminal-deck')) t.el.classList.toggle('active', key === id)
   renderList(); updateToolbar(); workbench.setSession(s)
   try { terminal.fit.fit() } catch {}
   if (hub.snapshot && !terminal.restored) {
@@ -297,6 +347,8 @@ async function select(id) {
 async function reload() {
   const list = await hub.sessions(); sessions.clear()
   for (const s of list) sessions.set(s.id, s)
+  // Terminals whose record is gone (e.g. a right-hand shell ended with its session).
+  for (const [id, t] of terminals) if (!sessions.has(id)) { t.term.dispose(); t.el.remove(); terminals.delete(id); states.delete(id); if (sideTerm === id) { sideTerm = null; sideNote('终端已结束。'); updateSideBar() } }
   cacheSessions(); renderList(); updateToolbar()
   const s = selected()
   // Status can change after recovery; refresh the side panel's availability.
@@ -314,7 +366,22 @@ function rememberProject(host, project) {
   try { localStorage.setItem('recent-projects:' + host, JSON.stringify([project, ...recentProjects(host).filter(p => p !== project)].slice(0, 8))) } catch {}
 }
 const projectInput = AIHubPathInput.attach({ input: $('create-project'), list: $('project-suggest'), hint: $('project-hint'), hub,
-  host: () => $('create-host').value, recent: () => recentProjects($('create-host').value) })
+  host: () => $('create-host').value, recent: () => recentProjects($('create-host').value), onState: projectState })
+// A non-Git directory can still run an agent, just without a worktree: untick it
+// automatically (and tick it again if the user then picks a Git repository).
+function projectState(st) {
+  const box = $('create-worktree')
+  if (box.disabled || !st.exists) return
+  if (!st.git && box.checked) { box.checked = false; box.dataset.auto = '1'; scheduleBranches(); updateWorktreeHint() }
+  else if (st.git && !box.checked && box.dataset.auto) { box.checked = true; delete box.dataset.auto; scheduleBranches(); updateWorktreeHint() }
+}
+function updateWorktreeHint() {
+  const box = $('create-worktree')
+  $('worktree-hint').textContent = box.disabled ? '远程 shell 不自动创建 worktree，目录不必是 Git 仓库。'
+    : box.checked ? '会在远端私有目录创建工作副本；不移动、重置原项目。需要目录是 Git 仓库（不会自动 git init）。'
+    : box.dataset.auto ? '这个目录不是 Git 仓库：将直接在该目录运行，不创建独立 worktree。'
+    : '直接在该目录运行，agent 的修改直接落在原目录。'
+}
 function updateTransport() {
   const sel = $('create-transport'), local = $('create-host').value === LOCAL
   if (local === (sel.value === 'local')) return
@@ -329,6 +396,7 @@ function showCreate(host) {
   updateTransport()
   $('create-project').value = selected()?.project || localStorage.getItem('last-project:' + $('create-host').value) || info?.initialProject || ''
   $('create-error').textContent = ''; $('create-dialog').showModal(); $('create-name').focus()
+  if ($('create-worktree').dataset.auto) { $('create-worktree').checked = true; delete $('create-worktree').dataset.auto; updateWorktreeHint() }
   projectInput.prefetch(); projectInput.refresh()
   $('create-save-project').checked = false; delete $('create-target').dataset.touched; delete $('create-base').dataset.touched; scheduleBranches()
   $('create-save-default').checked = false; fillLaunch(true)
@@ -417,7 +485,7 @@ function updateMode() {
   const disabled = $('create-tool').value === 'shell'
   $('create-worktree').disabled = disabled
   scheduleBranches()
-  $('worktree-hint').textContent = disabled ? '远程 shell 不自动创建 worktree，目录不必是 Git 仓库。' : '会在远端私有目录创建工作副本；不移动、重置原项目。非 Git 目录不会自动初始化。'
+  updateWorktreeHint()
 }
 async function create(event) {
   event.preventDefault(); if (busy) return
@@ -549,7 +617,7 @@ $('create-tool').onchange = () => { updateMode(); fillLaunch(true) }
 $('create-preset').onchange = updateLaunchPreview; $('create-args').oninput = updateLaunchPreview
 $('launch-reset').onclick = () => action(async () => { launchConfig = await hub.resetLaunchDefault($('create-tool').value); fillLaunch(true); toast('已恢复该工具的内置默认启动方式') })
 $('create-project').addEventListener('change', scheduleBranches); $('create-project').addEventListener('input', scheduleBranches)
-$('create-worktree').addEventListener('change', scheduleBranches)
+$('create-worktree').addEventListener('change', () => { delete $('create-worktree').dataset.auto; scheduleBranches(); updateWorktreeHint() })
 $('create-base').onchange = () => { $('create-base').dataset.touched = '1'; updateBranchHint() }
 $('create-target').oninput = () => { $('create-target').dataset.touched = '1'; updateBranchHint() }
 $('create-host').onchange = () => { updateTransport(); scheduleBranches(); $('create-project').value = localStorage.getItem('last-project:' + $('create-host').value) || ($('create-host').value === info?.initialHost ? info.initialProject : '') ; projectInput.prefetch(); projectInput.refresh() }
@@ -635,7 +703,8 @@ document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes(
 document.addEventListener('drop', e => { if (!e.dataTransfer?.files.length || !active) return; e.preventDefault(); for (const file of e.dataTransfer.files) action(() => uploadBlob(file)) })
 document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); if (!$('create-dialog').open) showCreate() } })
 new ResizeObserver(fitActive).observe($('workspace'))
-workbench.init({ hub, toast, getSession: selected, insertText: file => action(() => insertPath(file)), onLayout: fitActive })
+workbench.init({ hub, toast, getSession: selected, insertText: file => action(() => insertPath(file)), onLayout: fitActive,
+  onTerminal: s => action(() => openSideTerminal(s)), offTerminal: closeSideTerminal })
 hub.onEvent(evt => {
   if (evt.type === 'backend') {
     if (!evt.online) $('backend-status').textContent = '本机后端断开，正在重连；远端 agent 保留'
@@ -645,7 +714,7 @@ hub.onEvent(evt => {
   // page has opened (selecting one later restores its tail from the snapshot).
   if (evt.type === 'update') toast('Catmux 已更新到新版本。刷新窗口以加载新界面（未保存的编辑草稿会保留）。', [{ label: '立即刷新', action: () => location.reload() }])
   if (evt.type === 'data') { const t = terminals.get(evt.id); if (t) feed(t, evt.data); noteOutput(evt.id, evt.data) }
-  if (evt.type === 'state') { states.set(evt.id,evt.status); scheduleList(); workbench.onState(evt.id, evt.status); if (evt.id === active) { updateToolbar(); $('status-detail').textContent = evt.detail || statusNames[evt.status]; fitActive() } }
+  if (evt.type === 'state') { states.set(evt.id,evt.status); scheduleList(); workbench.onState(evt.id, evt.status); if (evt.id === sideTerm) updateSideBar(); if (evt.id === active) { updateToolbar(); $('status-detail').textContent = evt.detail || statusNames[evt.status]; fitActive() } }
 })
 // First paint from the local cache (names / paths only) so a reload does not
 // flash an empty sidebar and the welcome screen before the backend answers.
@@ -658,7 +727,7 @@ function paintFromCache() {
   } catch {}
 }
 function cacheSessions() {
-  try { localStorage.setItem('sessions-cache', JSON.stringify([...sessions.values()].map(({ id, name, host, tool, cwd, project, group, owned, mode, status, launch, createdAt, tmux }) => ({ id, name, host, tool, cwd, project, group, owned, mode, status, launch, createdAt, tmux })))) } catch {}
+  try { localStorage.setItem('sessions-cache', JSON.stringify([...sessions.values()].map(({ id, name, host, tool, cwd, project, group, owned, mode, status, launch, createdAt, tmux, companionOf }) => ({ id, name, host, tool, cwd, project, group, owned, mode, status, launch, createdAt, tmux, companionOf })))) } catch {}
 }
 async function init() {
   if (!hub) throw new Error('未连接后端。请运行 catmux start 后打开 http://127.0.0.1:48731。')

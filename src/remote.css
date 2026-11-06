@@ -262,3 +262,13 @@ dialog label{display:block;color:var(--muted);font-size:11px;margin-top:14px}dia
 .end-banner.error{background:#f0544c12;border:1px solid #f0544c44;color:var(--danger)}
 .end-result{margin-top:8px;font-size:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .danger-btn{color:var(--danger);border-color:#f0544c55}
+
+/* Right-hand terminal: a shell in the session's directory (its own tmux session). */
+.side-term{display:none}
+.wb-body.term-view>:not(.side-term){display:none}
+.wb-body.term-view>.side-term{display:flex;flex-direction:column;flex:1;min-height:0}
+.side-term-bar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.side-term-status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.side-term-note{margin:0;padding:18px 14px;color:var(--dim);font-size:12px}
+.side-term-note[hidden]{display:none}
+.side-term-deck{flex:1;min-height:0;padding:8px 8px 4px}
