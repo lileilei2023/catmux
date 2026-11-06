@@ -99,6 +99,7 @@ async function createWebServer(options = {}) {
     probe: ({ host }) => service.probe(host), discover: ({ host }) => service.remoteSessions(host),
     create: opts => service.create(opts), import: opts => service.importSession(opts),
     connect: ({ id }) => connections.connect(id), disconnect: ({ id }) => { service.get(id); connections.disconnect(id); return true },
+    revive: async ({ id }) => { connections.disconnect(id); const r = await service.revive(id); await connections.connect(id); return r },
     snapshot: ({ id }) => connections.snapshot(id), redraw: ({ id }) => connections.redraw(id),
     write: ({ id, data }) => connections.write(id, data), resize: ({ id, cols, rows }) => connections.resize(id, cols, rows),
     git: ({ id, root }) => service.git(id, root), files: ({ id, path, root }) => service.files(id, path, root),

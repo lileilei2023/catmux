@@ -103,6 +103,7 @@ function sessionMenu(s) {
   return [
     { label: '打开', action: () => select(s.id) },
     { label: '连接', disabled: online || ['stopped'].includes(s.status), action: async () => { await select(s.id); if (!online) await hub.connect(s.id) } },
+    { label: '恢复会话（重建 tmux 并接上原对话）', disabled: !canRevive(s), action: async () => { await select(s.id); await reviveSession(s.id) } },
     { label: '断开（远端 agent 保留）', disabled: !online, action: () => hub.disconnect(s.id) },
     '-',
     { label: '重命名…', action: () => renameSession(s, 'name') },
@@ -143,7 +144,8 @@ function updateToolbar() {
   $('session-host').title = s?.launch?.args?.length ? commandLine(s.tool, s.launch.args) : ''
   $('connection').textContent = statusNames[status] || status
   $('connection').classList.toggle('online', status === 'connected')
-  $('connect').textContent = s && ['failed', 'creating'].includes(s.status) ? '恢复并连接' : '连接'
+  $('connect').textContent = s && ['failed', 'creating'].includes(s.status) ? '恢复并连接' : canRevive(s) ? '恢复会话' : '连接'
+  $('connect').title = canRevive(s) ? '在原目录重建 tmux 会话，并让 agent 接上之前的对话' : ''
   // While booting from cache the record may be stale: show it, but no actions yet.
   const booting = document.body.classList.contains('booting')
   $('terminal-focus').disabled = !s || booting
@@ -292,7 +294,7 @@ async function openSideTerminal(s) {
   updateSideBar(); fitActive(); t.term.focus()
 }
 function closeSideTerminal() { sideSeq++; sideTerm = null; updateSideBar() }
-$('side-term-reconnect').onclick = () => action(async () => { if (sideTerm) { await hub.connect(sideTerm); terminals.get(sideTerm)?.term.focus() } })
+$('side-term-reconnect').onclick = () => action(async () => { if (sideTerm) { await (states.get(sideTerm) === 'missing' ? hub.revive(sideTerm) : hub.connect(sideTerm)); terminals.get(sideTerm)?.term.focus() } })
 function updateFontControls() {
   $('terminal-font-size').textContent = `${terminalFontSize} px`
   $('terminal-font-smaller').disabled = terminalFontSize <= 11
@@ -626,10 +628,19 @@ $('refresh-hosts').onclick = () => action(refreshHosts)
 $('probe').onclick = () => action(showProbe); $('discover').onclick = () => action(discover)
 $('info-close').onclick = () => $('info-dialog').close()
 $('connect').onclick = () => action(async () => {
+  if (canRevive(selected())) return reviveSession(active)
   try { await hub.connect(active) } finally { await reload() }
   fitActive(); terminals.get(active)?.term.focus()
   if (selected()?.recoveryNote) toast(selected().recoveryNote)
 })
+// Shown once a connect found the tmux session gone (e.g. the device rebooted).
+const canRevive = s => !!(s && s.owned && s.mode === 'direct' && s.tmux === `aihub-${s.id}` && !['stopped', 'failed', 'creating'].includes(s.status) && states.get(s.id) === 'missing')
+async function reviveSession(id) {
+  const s = sessions.get(id)
+  const r = await hub.revive(id); await reload()
+  fitActive(); terminals.get(id)?.term.focus()
+  toast(r.resumed ? `已重建 tmux，${s.tool === 'codex' ? 'Codex' : 'Claude'} 正在接上原对话` : '已在原目录重建 tmux 会话')
+}
 $('disconnect').onclick = () => action(() => hub.disconnect(active))
 async function stopSession(id) { const r = await hub.stop(id); await reload(); return r }
 // Catmux worktree tasks end through a dialog (stop only / clean up / push + PR).

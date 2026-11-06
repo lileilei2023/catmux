@@ -104,6 +104,8 @@ function newSession(opts) {
     worktree: mode === 'direct' && tool !== 'shell' && !!opts.worktree,
     group: typeof opts.group === 'string' ? opts.group.trim().slice(0, 100) : '',
     tmux: mode === 'direct' ? `aihub-${id}` : null, owned: true,
+    // Claude's conversation id, chosen up front so it can be resumed after a reboot.
+    ...(tool === 'claude' ? { agentSession: crypto.randomUUID() } : {}),
     createdAt: Date.now(), status: 'creating' }
 }
 function attachSpec(session, bins) {

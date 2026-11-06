@@ -88,7 +88,7 @@
     info: () => invoke('info'), hosts: () => invoke('hosts'), probe: host => invoke('probe', { host }),
     sessions: () => invoke('sessions'), discover: host => invoke('discover', { host }),
     create: opts => invoke('create', opts), import: opts => invoke('import', opts),
-    connect: id => invoke('connect', { id }), disconnect: id => invoke('disconnect', { id }),
+    connect: id => invoke('connect', { id }), revive: id => invoke('revive', { id }), disconnect: id => invoke('disconnect', { id }),
     stop: id => confirmOperation(id, 'stop'), forget: id => confirmOperation(id, 'forget'),
     snapshot: id => invoke('snapshot', { id }), redraw: id => invoke('redraw', { id }),
     rename: (id, name, group) => invoke('rename', { id, name, group }),

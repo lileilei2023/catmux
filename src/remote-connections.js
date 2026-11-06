@@ -41,7 +41,7 @@ class RemoteConnections extends EventEmitter {
     try {
       const s = this.service.get(id), info = await this.service.inspect(id)
       if (!link.desired || generation !== link.generation) return
-      if (!info) { link.desired = false; this.setState(id, link, 'missing', '远端会话不存在，不会重建 agent'); return }
+      if (!info) { link.desired = false; this.setState(id, link, 'missing', this.service.revivable(s) ? '远端 tmux 会话不存在（设备可能重启过）。点「恢复会话」在原目录重建并接上原对话' : '远端会话不存在，不会重建 agent'); return }
       const spec = P.attachSpec(s, this.service.bins)
       if (!spec.file) throw new Error('本机找不到所选 SSH/tssh 客户端')
       const proc = this.createPty(spec.file, spec.args)

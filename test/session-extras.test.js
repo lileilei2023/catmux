@@ -141,3 +141,67 @@ exec(compile(source,'real-create-protocol','exec'))
     fs.rmSync(fixture, { recursive: true, force: true })
   }
 })
+
+test('after a reboot (tmux gone) a session is rebuilt in its directory and the CLI resumes its conversation', { skip: !tmux }, async () => {
+  const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aihub-revive-')))
+  const bin = path.join(fixture, 'bin'), project = path.join(fixture, 'app'), log = path.join(fixture, 'argv.log'); fs.mkdirSync(bin); fs.mkdirSync(project)
+  // Stand-ins for the official CLIs: record argv; "nothing to resume" fails at once.
+  for (const tool of ['claude', 'codex']) fs.writeFileSync(path.join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> ${log}\ncase " $* " in *" --continue "*|*" resume "*) [ -f ${fixture}/has-${tool} ] || exit 1;; esac\nexec sleep 30\n`, { mode: 0o755 })
+  const socket = 'aihub-test-' + crypto.randomUUID().replaceAll('-', '')
+  const env = { PATH: bin + ':' + process.env.PATH, HOME: fixture, TERM: 'xterm-256color', LANG: 'en_US.UTF-8' }
+  const command = args => spawnSync(tmux, ['-L', socket, '-f', '/dev/null', ...args], { env, encoding: 'utf8', timeout: 5000 })
+  const wrapper = String.raw`
+import sys, subprocess
+source=sys.stdin.read()
+tmux, socket, op, arg=sys.argv[1:]
+original_run=subprocess.run
+def isolated(args, *a, **kw):
+    if args[0]=='tmux': args=[tmux,'-L',socket,'-f','/dev/null']+args[1:]
+    return original_run(args,*a,**kw)
+subprocess.run=isolated
+sys.argv=['remote',op,arg]
+exec(compile(source,'real-revive-protocol','exec'))
+`
+  const call = (op, s) => {
+    const r = spawnSync('python3', ['-c', wrapper, tmux, socket, op, JSON.stringify(s)], { env, encoding: 'utf8', input: REMOTE, timeout: 10000 })
+    return JSON.parse(r.stdout.split('\n').find(l => l.startsWith('AIHUB_RESULT:')).slice(13))
+  }
+  const lines = () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []
+  const until = async (fn, what) => { for (let i = 0; i < 50; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 100)) } assert.fail(what + '\n' + lines().join('\n')) }
+  const session = (tool, worktree = false) => ({ ...P.newSession({ host: 'macmini', project, tool, preset: 'full' }), worktree, status: 'detached' })
+  try {
+    const claude = session('claude'), sid = claude.agentSession
+    assert.match(sid, /^[0-9a-f-]{36}$/)
+    assert.equal(call('create', claude).ok, true)
+    await until(() => lines().length === 1, 'claude started')
+    assert.equal(lines()[0], `claude --dangerously-skip-permissions --session-id ${sid}`)
+    assert.match(call('revive', claude).error, /仍在运行/)
+    command(['kill-server']) // the reboot
+    fs.writeFileSync(path.join(fixture, 'has-claude'), '')
+    const revived = call('revive', claude)
+    assert.equal(revived.ok, true, revived.error); assert.equal(revived.data.resumed, true)
+    await until(() => lines().length === 2, 'claude resumed')
+    assert.equal(lines()[1], `claude --dangerously-skip-permissions --resume ${sid}`)
+    assert.equal(command(['display-message', '-p', '-t', '=' + claude.tmux + ':', '#{pane_current_path}']).stdout.trim(), project)
+    // A worktree session owns its directory: the latest conversation there (follows /clear).
+    const codex = session('codex', true); fs.writeFileSync(path.join(fixture, 'has-codex'), '')
+    const tree = { ...codex, worktree: false }
+    assert.equal(call('create', tree).ok, true)
+    command(['kill-server'])
+    assert.equal(call('revive', codex).ok, true)
+    await until(() => lines().some(l => l === 'codex resume --last --dangerously-bypass-approvals-and-sandbox'), 'codex resumed')
+    // Nothing to resume yet: a fresh agent starts in the same tmux session.
+    fs.rmSync(path.join(fixture, 'has-claude'))
+    command(['kill-server']); fs.rmSync(log)
+    assert.equal(call('revive', { ...claude, worktree: true }).ok, true)
+    await until(() => lines().length === 2, 'fresh claude after failed resume')
+    assert.deepEqual(lines(), ['claude --dangerously-skip-permissions --continue', `claude --dangerously-skip-permissions --session-id ${sid}`])
+    // Only Catmux's own records, and only when the directory still exists.
+    assert.match(call('revive', { ...claude, owned: false }).error, /只能恢复/)
+    command(['kill-server'])
+    assert.match(call('revive', { ...claude, cwd: path.join(fixture, 'gone') }).error, /目录已不存在/)
+  } finally {
+    command(['kill-server'])
+    fs.rmSync(fixture, { recursive: true, force: true })
+  }
+})

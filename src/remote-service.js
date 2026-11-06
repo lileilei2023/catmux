@@ -38,6 +38,30 @@ def sessions():
         info=panes[0].split('\t') if panes else ['','','1','','']
         result.append(dict(name=cols[0], attached=int(cols[1]), windows=int(cols[2]), command=info[0], cwd=info[1], dead=info[2]=='1',pid=info[3] if len(info)>3 else '',paneId=info[4] if len(info)>4 else ''))
     return result
+def launch_argv(arg, resume=False):
+    # Official CLI plus the user's chosen permission / extra arguments. A Claude
+    # session gets a fixed conversation id so it can be resumed after a reboot.
+    tool=arg['tool']; extra=[str(a) for a in (arg.get('launch') or {}).get('args',[])]; sid=arg.get('agentSession')
+    if not resume: return [tool]+extra+(['--session-id',sid] if tool=='claude' and sid else [])
+    # A worktree directory belongs to this session alone: "latest in this
+    # directory" also follows a /clear. Shared directories use the fixed id.
+    if tool=='codex': return ['codex','resume','--last']+extra
+    if tool=='claude': return ['claude']+extra+(['--resume',sid] if sid and not arg['worktree'] else ['--continue'])
+    return None
+def start_tmux(arg, cwd, argv, fresh=None):
+    import shlex
+    login='zsh' if sys.platform=='darwin' else 'bash'
+    # Each argument shell-quoted: arguments never become shell syntax.
+    q=lambda a: ' '.join(shlex.quote(x) for x in a)
+    if arg['tool']=='shell': launch='exec '+login+' -l'
+    elif not fresh: launch='exec '+q(argv)
+    # Resume; if it fails at once (nothing to resume yet), start a new conversation.
+    else: launch='t=$(date +%s); '+q(argv)+'; r=$?; if [ $r -ne 0 ] && [ $(($(date +%s)-t)) -lt 15 ]; then printf "\\n[Catmux] 没有可接上的对话，已重新启动 agent\\n\\n"; exec '+q(fresh)+'; fi; exit $r'
+    command='exec '+login+' -lc '+shlex.quote(launch)
+    run(['tmux','new-session','-d','-s',arg['tmux'],'-c',cwd,command,
+        ';','set-option','-w','-t',exact(arg['tmux'])+':','remain-on-exit','on',
+        ';','set-option','-t',exact(arg['tmux'])+':','mouse','on',
+        ';','set-option','-t',exact(arg['tmux'])+':','history-limit','50000'])
 try:
     if op=='probe':
         result=dict(os=run(['uname','-s']),arch=run(['uname','-m']),home=os.path.expanduser('~'),
@@ -67,17 +91,7 @@ try:
             start=resolve_base(root,arg['base']) if arg.get('base') else 'HEAD'
             git(root,['worktree','add','-b',branch,wt,start])
             cwd=os.path.normpath(os.path.join(wt,os.path.relpath(cwd,root)))
-        login='zsh' if sys.platform=='darwin' else 'bash'
-        import shlex
-        # Official CLI plus the user's chosen permission / extra arguments,
-        # each one shell-quoted: arguments never become shell syntax.
-        argv=[arg['tool']]+[str(a) for a in (arg.get('launch') or {}).get('args',[])]
-        launch='exec '+login+' -l' if arg['tool']=='shell' else 'exec '+' '.join(shlex.quote(a) for a in argv)
-        command='exec '+login+' -lc '+shlex.quote(launch)
-        run(['tmux','new-session','-d','-s',arg['tmux'],'-c',cwd,command,
-            ';','set-option','-w','-t',exact(arg['tmux'])+':','remain-on-exit','on',
-            ';','set-option','-t',exact(arg['tmux'])+':','mouse','on',
-            ';','set-option','-t',exact(arg['tmux'])+':','history-limit','50000'])
+        start_tmux(arg,cwd,launch_argv(arg))
         result=dict(cwd=cwd,tmux=arg['tmux'],branch=branch,baseRef=start)
     elif op=='recover':
         # Read-only reconciliation of partial creation. Never create, respawn,
@@ -95,6 +109,20 @@ try:
             raise RuntimeError('原会话目录与此记录不匹配；不会接管其他会话')
         if arg['worktree']: branch=git(found['cwd'],['branch','--show-current'])
         result=dict(cwd=found['cwd'],tmux=found['name'],branch=branch,pid=found['pid'],paneId=found['paneId'],remoteDead=found['dead'])
+    elif op=='revive':
+        # The device rebooted (or the agent exited): same tmux name, same
+        # directory, and the CLI's own resume of this directory's conversation.
+        if not arg['owned'] or arg['mode']!='direct' or arg['tmux']!='aihub-'+arg['id']: raise RuntimeError('只能恢复 Catmux 创建的会话')
+        found=next((s for s in sessions() if s['name']==arg['tmux']),None)
+        if found and not found['dead']: raise RuntimeError('原会话仍在运行，直接连接即可')
+        cwd=arg['cwd']; mount_guard(cwd)
+        if not os.path.isdir(cwd): raise RuntimeError('会话目录已不存在（worktree 可能已被清理），无法恢复')
+        if not shutil.which('tmux'): raise RuntimeError('登录 shell 找不到 tmux')
+        if arg['tool']!='shell' and not shutil.which(arg['tool']): raise RuntimeError('登录 shell 找不到 '+arg['tool'])
+        if found: run(['tmux','kill-session','-t',exact(arg['tmux'])]) # only its own pane, already exited
+        resume=launch_argv(arg,True)
+        start_tmux(arg,cwd,resume or launch_argv(arg),launch_argv(arg) if resume else None)
+        result=dict(resumed=bool(resume),replacedDead=bool(found))
     elif op=='inspect':
         found=[s for s in sessions() if s['name']==arg['tmux']]
         result=found[0] if found else None
@@ -469,6 +497,17 @@ class RemoteService {
     s.launch = { preset: 'default', extra: [], args: [], danger: false, imported: true }
     if (/^claudesquad_/.test(found.name)) s.squadInstance = true
     Object.assign(s, { tmux: found.name, owned: false, status: 'detached' }); this.store.put(s); return s
+  }
+  // The tmux session is gone (device rebooted) or its agent exited: start it
+  // again under the same name and directory, resuming the CLI's conversation.
+  revivable(s) { return !!(s.owned && s.mode === 'direct' && s.tmux === `aihub-${s.id}` && s.cwd && !['stopped', 'failed', 'creating'].includes(s.status)) }
+  async revive(id) {
+    const s = this.get(id)
+    if (!this.revivable(s)) throw new Error('只有 Catmux 创建、未停止的会话可以恢复')
+    if (s.agentSession != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s.agentSession)) throw new Error('会话记录无效')
+    await this.configured(s.host)
+    const r = await this.call(s.host, 'revive', { ...s, cwd: P.remotePath(s.cwd) })
+    s.revivedAt = Date.now(); this.store.put(s); return r
   }
   async inspect(id) { const s = this.get(id); return this.call(s.host, 'inspect', s) }
   // Right-hand terminal: a plain shell in the session's directory on the same
