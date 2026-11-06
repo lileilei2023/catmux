@@ -74,7 +74,8 @@ pwa_app() { local a=( "$HOME/Applications/Chrome Apps.localized"/(Catmux|AI\ Hub
 # to control Chrome once. Prints "yes" when a window was found.
 focus_existing() {
   pgrep -xq "Google Chrome" || return 1
-  [[ $(osascript - "$URL" 2>/dev/null <<'APPLESCRIPT'
+  local out
+  out=$(osascript - "$URL" 2>&1 <<'APPLESCRIPT'
 on run argv
   set target to item 1 of argv
   tell application "Google Chrome"
@@ -95,7 +96,10 @@ on run argv
   return "no"
 end run
 APPLESCRIPT
-) == yes ]]
+)
+  # Logged so a refused permission ("Not authorized", -1743) is visible in catmux logs.
+  print -r -- "$(date '+%F %T') open: 切换到已开窗口 → ${out:-无输出}" >> "$LOG"
+  [[ $out == yes ]]
 }
 open_app() {
   start >/dev/null || { start; return 1; }
@@ -132,12 +136,18 @@ doctor() {
   $ok
 }
 make_launcher() {
+  # Rebuild only when the script or icon changed: every rebuild gets a new ad-hoc
+  # signature, and macOS then forgets the "control Google Chrome" permission.
+  local source="do shell script \"/bin/zsh -lc \" & quoted form of \"${ROOT}/bin/catmux open\""
+  local stamp=$({ print -r -- "$source"; cat "$ROOT/web/AppIcon.icns" } | LC_ALL=C shasum -a 256 | cut -c1-16)
+  [[ -z ${FORCE:-} && -d $APP && $(cat "$APP/Contents/Resources/catmux-stamp" 2>/dev/null) == $stamp ]] && return 0
   local tmp=$(mktemp -d)
-  osacompile -o "$tmp/Catmux.app" -e "do shell script \"/bin/zsh -lc \" & quoted form of \"${ROOT}/bin/catmux open\"" 2> >(grep -v 'replacing existing signature' >&2)
+  osacompile -o "$tmp/Catmux.app" -e "$source" 2> >(grep -v 'replacing existing signature' >&2)
   cp "$ROOT/web/AppIcon.icns" "$tmp/Catmux.app/Contents/Resources/applet.icns"
   # Newer osacompile also writes an asset catalog (Assets.car + CFBundleIconName),
   # which macOS prefers over applet.icns — drop it so our icon is the one shown.
   rm -f "$tmp/Catmux.app/Contents/Resources/Assets.car"
+  print -r -- $stamp > "$tmp/Catmux.app/Contents/Resources/catmux-stamp"
   /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$tmp/Catmux.app/Contents/Info.plist" 2>/dev/null || true
   # The icon changed after osacompile signed it; re-seal our own local applet.
   codesign --force --sign - "$tmp/Catmux.app" >/dev/null 2>&1 || true
@@ -256,7 +266,7 @@ case ${1:-help} in
   doctor) doctor ;;
   update) update ;;
   dock) dock ;;
-  launcher) make_launcher; echo "已重建启动器：$APP" ;;
+  launcher) FORCE=1 make_launcher; echo "已重建启动器：$APP" ;;
   icon) set_icon ${2:-} ;;
   logs) tail -n 50 -f "$LOG" ;;
   install) install ;;
