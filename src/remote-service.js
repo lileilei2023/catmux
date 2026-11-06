@@ -112,7 +112,8 @@ try:
     elif op=='revive':
         # The device rebooted (or the agent exited): same tmux name, same
         # directory, and the CLI's own resume of this directory's conversation.
-        if not arg['owned'] or arg['mode']!='direct' or arg['tmux']!='aihub-'+arg['id']: raise RuntimeError('只能恢复 Catmux 创建的会话')
+        # Imported sessions come back under their own tmux name, without launch flags (unknown).
+        if arg['mode']!='direct' or not arg.get('tmux') or (arg['owned'] and arg['tmux']!='aihub-'+arg['id']): raise RuntimeError('只能恢复此记录对应的 tmux 会话')
         found=next((s for s in sessions() if s['name']==arg['tmux']),None)
         if found and not found['dead']: raise RuntimeError('原会话仍在运行，直接连接即可')
         cwd=arg['cwd']; mount_guard(cwd)
@@ -500,10 +501,10 @@ class RemoteService {
   }
   // The tmux session is gone (device rebooted) or its agent exited: start it
   // again under the same name and directory, resuming the CLI's conversation.
-  revivable(s) { return !!(s.owned && s.mode === 'direct' && s.tmux === `aihub-${s.id}` && s.cwd && !['stopped', 'failed', 'creating'].includes(s.status)) }
+  revivable(s) { return !!(s.mode === 'direct' && s.tmux && (!s.owned || s.tmux === `aihub-${s.id}`) && s.cwd && !['stopped', 'failed', 'creating'].includes(s.status)) }
   async revive(id) {
     const s = this.get(id)
-    if (!this.revivable(s)) throw new Error('只有 Catmux 创建、未停止的会话可以恢复')
+    if (!this.revivable(s)) throw new Error('只有未停止的 tmux 会话可以恢复')
     if (s.agentSession != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s.agentSession)) throw new Error('会话记录无效')
     await this.configured(s.host)
     const r = await this.call(s.host, 'revive', { ...s, cwd: P.remotePath(s.cwd) })

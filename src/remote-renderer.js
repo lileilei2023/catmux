@@ -103,7 +103,7 @@ function sessionMenu(s) {
   return [
     { label: '打开', action: () => select(s.id) },
     { label: '连接', disabled: online || ['stopped'].includes(s.status), action: async () => { await select(s.id); if (!online) await hub.connect(s.id) } },
-    { label: '恢复会话（重建 tmux 并接上原对话）', disabled: !canRevive(s), action: async () => { await select(s.id); await reviveSession(s.id) } },
+    { label: '恢复会话（重建 tmux 并接上原对话）', disabled: online || !revivable(s), action: async () => { await select(s.id); await reviveSession(s.id) } },
     { label: '断开（远端 agent 保留）', disabled: !online, action: () => hub.disconnect(s.id) },
     '-',
     { label: '重命名…', action: () => renameSession(s, 'name') },
@@ -634,12 +634,13 @@ $('connect').onclick = () => action(async () => {
   if (selected()?.recoveryNote) toast(selected().recoveryNote)
 })
 // Shown once a connect found the tmux session gone (e.g. the device rebooted).
-const canRevive = s => !!(s && s.owned && s.mode === 'direct' && s.tmux === `aihub-${s.id}` && !['stopped', 'failed', 'creating'].includes(s.status) && states.get(s.id) === 'missing')
+const revivable = s => !!(s && s.mode === 'direct' && s.tmux && (!s.owned || s.tmux === `aihub-${s.id}`) && s.cwd && !['stopped', 'failed', 'creating'].includes(s.status))
+const canRevive = s => revivable(s) && states.get(s.id) === 'missing'
 async function reviveSession(id) {
   const s = sessions.get(id)
   const r = await hub.revive(id); await reload()
   fitActive(); terminals.get(id)?.term.focus()
-  toast(r.resumed ? `已重建 tmux，${s.tool === 'codex' ? 'Codex' : 'Claude'} 正在接上原对话` : '已在原目录重建 tmux 会话')
+  toast((r.resumed ? `已重建 tmux，${s.tool === 'codex' ? 'Codex' : 'Claude'} 正在接上原对话` : '已在原目录重建 tmux 会话') + (s.owned || s.tool === 'shell' ? '' : '（导入的会话：按 CLI 默认权限启动）'))
 }
 $('disconnect').onclick = () => action(() => hub.disconnect(active))
 async function stopSession(id) { const r = await hub.stop(id); await reload(); return r }

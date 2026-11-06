@@ -197,7 +197,13 @@ exec(compile(source,'real-revive-protocol','exec'))
     await until(() => lines().length === 2, 'fresh claude after failed resume')
     assert.deepEqual(lines(), ['claude --dangerously-skip-permissions --continue', `claude --dangerously-skip-permissions --session-id ${sid}`])
     // Only Catmux's own records, and only when the directory still exists.
-    assert.match(call('revive', { ...claude, owned: false }).error, /只能恢复/)
+    assert.match(call('revive', { ...claude, tmux: 'other' }).error, /只能恢复/)
+    // An imported session comes back under its own name, in its directory, with no launch flags.
+    command(['kill-server']); fs.writeFileSync(path.join(fixture, 'has-claude'), ''); fs.rmSync(log)
+    assert.equal(call('revive', { ...claude, owned: false, tmux: 'yanbao', agentSession: undefined, launch: { args: [] } }).ok, true)
+    await until(() => lines().length === 1, 'imported claude resumed')
+    assert.equal(lines()[0], 'claude --continue')
+    assert.equal(command(['display-message', '-p', '-t', '=yanbao:', '#{pane_current_path}']).stdout.trim(), project)
     command(['kill-server'])
     assert.match(call('revive', { ...claude, cwd: path.join(fixture, 'gone') }).error, /目录已不存在/)
   } finally {
