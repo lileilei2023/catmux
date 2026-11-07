@@ -226,7 +226,7 @@ test('tssh stuck reconnecting after a reboot is replaced; a recovered tssh is le
     const procs = []
     const links = new RemoteConnections(service, () => {
       const p = new EventEmitter(); p.killed = false
-      p.resize = () => {}; p.write = () => {}; p.kill = () => { p.killed = true; setImmediate(() => p.emit('exit', { exitCode: null })) }
+      p.sizes = []; p.resize = (c, r) => p.sizes.push(r); p.write = () => {}; p.kill = () => { p.killed = true; setImmediate(() => p.emit('exit', { exitCode: null })) }
       procs.push(p); return p
     })
     const states = []; links.on('event', e => { if (e.type === 'state') states.push(e.status) })
@@ -239,6 +239,9 @@ test('tssh stuck reconnecting after a reboot is replaced; a recovered tssh is le
     await wait(50); procs[0].emit('data', '\x1b[1;1Hnormal tmux output')
     await wait(200)
     assert.equal(procs[0].killed, false, 'tssh that reconnected by itself is kept')
+    const height = procs[0].sizes.at(-1)
+    await wait(1000)
+    assert(procs[0].sizes.includes(height - 1) && procs[0].sizes.at(-1) === height, 'after the notice box, tmux repaints the whole screen once')
     // The device rebooted: the error repeats and nothing else arrives.
     alive = false
     procs[0].emit('data', 'Last reconnect error: read auth packet failed: read udp 100.78.165.1:5000: i/o timeout')

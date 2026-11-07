@@ -50,7 +50,7 @@ class RemoteConnections extends EventEmitter {
       // tssh roams over UDP and retries on its own. After the device rebooted its
       // tsshd is gone and those retries never succeed ("read auth packet failed"):
       // take over, so a fresh check reattaches or reports the session missing.
-      const lost = { first: 0, normal: 0, timer: null }
+      const lost = { first: 0, normal: 0, banner: 0, timer: null, repaint: null }
       const takeOver = why => {
         if (generation !== link.generation || link.respawn) return
         clearTimeout(lost.timer); link.respawn = why
@@ -61,18 +61,31 @@ class RemoteConnections extends EventEmitter {
         if (s.transport === 'udp' && confirmed) {
           const now = Date.now()
           if (/Last reconnect error|connection to the server was lost/i.test(data)) {
+            lost.banner = now
             if (/connection refused/i.test(data)) takeOver('远端 tsshd 已不在（设备可能重启过）')
             else if (!lost.first) {
               lost.first = now
-              lost.timer = setTimeout(() => { if (lost.normal > lost.first) lost.first = 0; else takeOver('tssh 持续重连失败') }, P.TSSH_TAKEOVER_MS)
+              lost.timer = setTimeout(() => { if (lost.normal > lost.banner) lost.first = 0; else takeOver('tssh 持续重连失败') }, P.TSSH_TAKEOVER_MS)
             }
-          } else lost.normal = now
+          } else {
+            lost.normal = now
+            // tssh got back by itself. Its notice box was drawn into the terminal
+            // behind tmux's back (shifting lines, duplicated status bar): repaint once.
+            if (lost.banner && !lost.repaint) lost.repaint = setTimeout(() => {
+              lost.repaint = null
+              if (generation !== link.generation || lost.normal <= lost.banner) return
+              lost.banner = 0; lost.first = 0; clearTimeout(lost.timer); this.redraw(id)
+            }, 1000)
+          }
         }
         link.tail = (link.tail + data).slice(-128 * 1024)
         handshake = (handshake + data).slice(-2048)
         if (!confirmed && /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|unable to authenticate|ssh:.*Permission denied/i.test(handshake)) fatal = true
         if (!confirmed && handshake.includes(`\x1b]777;AIHUB_READY:${id}\x07`)) {
           confirmed = true
+          // Reattached after a drop: the screen still holds the old client's
+          // output (and any reconnect notice); have tmux repaint it whole.
+          if (link.attempt) setTimeout(() => { if (generation === link.generation) this.redraw(id) }, 400)
           this.setState(id, link, 'connected', `${s.transport === 'local' ? '本机 tmux 已连接' : (s.transport === 'udp' ? 'tssh UDP' : 'SSH TCP') + ' 远端握手完成'} · 同一 tmux 会话`)
         }
         this.emit('event', { type: 'data', id, data })
@@ -80,7 +93,7 @@ class RemoteConnections extends EventEmitter {
       proc.on('error', error => { if (generation === link.generation) { fatal = true; this.setState(id, link, 'blocked', error.message); proc.kill() } })
       proc.on('exit', ({ exitCode }) => {
         if (generation !== link.generation) return
-        link.proc = null; clearTimeout(link.stable); clearTimeout(lost.timer)
+        link.proc = null; clearTimeout(link.stable); clearTimeout(lost.timer); clearTimeout(lost.repaint)
         if (!link.desired || this.shuttingDown) return
         if (link.respawn) { const why = link.respawn; link.respawn = null; this.retry(id, link, why); return }
         if (!exitCode || fatal) { link.desired = false; this.setState(id, link, fatal ? 'blocked' : 'detached', fatal ? '客户端校验/运行失败，停止自动重试' : '连接正常退出，远端会话保留'); return }
